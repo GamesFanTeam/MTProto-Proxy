@@ -1,7 +1,3 @@
---- mtproto-install.sh (原始)
-
-
-+++ mtproto-install.sh (修改后)
 #!/bin/bash
 set -euo pipefail
 
