@@ -21,7 +21,7 @@ show_banner() {
     echo "  ██║╚██╔╝██║   ██║   ██╔═══╝ ██╔══██╗██║   ██║   ██║   ██║   ██║"
     echo "  ██║ ╚═╝ ██║   ██║   ██║     ██║  ██║╚██████╔╝   ██║   ╚██████╔╝"
     echo "  ╚═╝     ╚═╝   ╚═╝   ╚═╝     ╚═╝  ╚═╝ ╚═════╝    ╚═╝   ╚═════╝  "
-    echo -e "${RESET}${MAGENTA}        MTProto Proxy Installer with Beautiful Web Panel"
+    echo -e "${RESET}${MAGENTA}        MTProto Proxy Telegram Installer by Mr_EFES"
     echo -e "${RESET}"
 }
 
