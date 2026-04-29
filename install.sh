@@ -346,8 +346,8 @@ if [[ ! -d "$PANEL_DIR/venv" ]]; then
 fi
 
 "$PANEL_DIR/venv/bin/pip" install -q --upgrade pip >/dev/null 2>&1
-# ИСПРАВЛЕНО: используем tomli для чтения и tomlkit для записи (сохраняет форматирование и точки в ключах)
-"$PANEL_DIR/venv/bin/pip" install -q Flask gunicorn tomli tomlkit werkzeug >/dev/null 2>&1
+# ИСПРАВЛЕНО: добавлен модуль toml
+"$PANEL_DIR/venv/bin/pip" install -q Flask gunicorn toml werkzeug >/dev/null 2>&1
 echo -e "${GREEN}Python зависимости установлены${RESET}"
 
 # Backend приложение
@@ -355,8 +355,7 @@ cat > "$PANEL_DIR/app.py" << 'PYEOF'
 import os
 import json
 import secrets
-import tomli
-import tomlkit
+import toml
 import subprocess
 from flask import Flask, render_template, request, redirect, url_for, session, flash
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -445,8 +444,8 @@ def change_password():
 def dashboard():
     cfg = load_config()
     try:
-        with open(TELEMT_TOML, 'rb') as f:
-            t_config = tomli.load(f)
+        with open(TELEMT_TOML, 'r') as f:
+            t_config = toml.load(f)
     except FileNotFoundError:
         t_config = {'access': {'users': {}}, 'censorship': {'tls_domain': 'max.ru'}}
 
@@ -470,19 +469,15 @@ def dashboard():
         user_key = f"{nickname}_{device}"
         new_secret = secrets.token_hex(16)
 
-        # Используем tomlkit для сохранения с правильным форматом
-        with open(TELEMT_TOML, 'r') as f:
-            doc = tomlkit.load(f)
+        if 'access' not in t_config:
+            t_config['access'] = {}
+        if 'users' not in t_config['access']:
+            t_config['access']['users'] = {}
 
-        if 'access' not in doc:
-            doc['access'] = tomlkit.table()
-        if 'users' not in doc['access']:
-            doc['access']['users'] = tomlkit.table()
-
-        doc['access']['users'][user_key] = new_secret
+        t_config['access']['users'][user_key] = new_secret
 
         with open(TELEMT_TOML, 'w') as f:
-            f.write(tomlkit.dumps(doc))
+            toml.dump(t_config, f)
 
         restart_telemt()
         flash(f'Доступ для {user_key} создан!', 'success')
@@ -495,11 +490,11 @@ def dashboard():
 def delete_user(username):
     try:
         with open(TELEMT_TOML, 'r') as f:
-            doc = tomlkit.load(f)
-        if username in doc.get('access', {}).get('users', {}):
-            del doc['access']['users'][username]
+            t_config = toml.load(f)
+        if username in t_config.get('access', {}).get('users', {}):
+            del t_config['access']['users'][username]
             with open(TELEMT_TOML, 'w') as f:
-                f.write(tomlkit.dumps(doc))
+                toml.dump(t_config, f)
             restart_telemt()
             flash(f'Пользователь {username} удален', 'success')
     except Exception as e:
