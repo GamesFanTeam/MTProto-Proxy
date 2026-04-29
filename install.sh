@@ -1,7 +1,3 @@
---- install.sh (原始)
-
-
-+++ install.sh (修改后)
 #!/bin/bash
 ################################################################################
 # MTProto Proxy Installer with SSL, Stub Site and Admin Panel
