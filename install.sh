@@ -326,8 +326,9 @@ EOF
 # ==========================================
 echo -e "\n${BLUE}[7/7] Генерация секретов и запуск MTProto...${NC}"
 mkdir -p /etc/mtg
-# Генерируем секрет FakeTLS маскирующийся под домен MTProto
-SECRET=$(mtg generate-secret tls -c "$MT_DOMAIN")
+
+# ИСПРАВЛЕНИЕ ЗДЕСЬ: Убран неактуальный флаг -c
+SECRET=$(mtg generate-secret tls "$MT_DOMAIN")
 
 cat > /etc/systemd/system/mtg.service << EOF
 [Unit]
