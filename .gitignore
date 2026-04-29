@@ -1,7 +1,3 @@
---- .gitignore (原始)
-
-
-+++ .gitignore (修改后)
 ```
 # Logs and temp files
 *.log
@@ -66,3 +62,6 @@ htmlcov/
 *.tar.xz
 *.tar.zst
 ```
+
++++ .gitignore (修改后)
+Nothing needs to be added to .gitignore since only a shell script file (`install.sh`) was modified and no build artifacts, dependencies, or temporary files were detected in the changes.
