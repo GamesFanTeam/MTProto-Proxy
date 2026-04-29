@@ -102,7 +102,7 @@ read -rp "Введите порт для панели управления [по
 PANEL_PORT=${PANEL_PORT_INPUT:-4444}
 
 # Email для сертификатов
-read -rp "Введите Email для уведомлений о сертификатах (необязательно): " CERT_EMAIL
+read -rp "Введите Email для SSL-сертификатов Let's Encrypt (необязательно): " CERT_EMAIL
 
 echo ""
 echo -e "${CYAN}Параметры установки:${RESET}"
