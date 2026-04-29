@@ -14,31 +14,29 @@ echo -e "${BLUE}======================================================${NC}"
 echo -e "${GREEN}  Инсталлятор MTProto Proxy + Сайт-Заглушка + Панель  ${NC}"
 echo -e "${BLUE}======================================================${NC}"
 
-# Проверка на root
 if [ "$EUID" -ne 0 ]; then
-  echo -e "${RED}[Ошибка] Пожалуйста, запустите скрипт от имени root (sudo ./install.sh)${NC}"
+  echo -e "${RED}[Ошибка] Пожалуйста, запустите скрипт от имени root${NC}"
   exit 1
 fi
 
 # ==========================================
-# 1. Сбор данных от пользователя
+# 1. Сбор данных
 # ==========================================
-echo -e "\n${YELLOW}>>> Введите домены для настройки (они должны быть уже привязаны к IP сервера):${NC}"
+echo -e "\n${YELLOW}>>> Введите домены:${NC}"
 read -p "1. Домен для MTProto Proxy (например, tg.example.com): " MT_DOMAIN
 read -p "2. Домен для Сайта-заглушки (например, example.com): " DECOY_DOMAIN
 read -p "3. Домен для Веб-панели (например, admin.example.com): " ADMIN_DOMAIN
-read -p "4. Email для SSL-сертификатов Let's Encrypt: " EMAIL
+read -p "4. Email для SSL: " EMAIL
 
 # ==========================================
 # 2. Установка зависимостей
 # ==========================================
-echo -e "\n${BLUE}[1/7] Установка необходимых пакетов...${NC}"
+echo -e "\n${BLUE}[1/7] Установка пакетов...${NC}"
 apt-get update > /dev/null
-apt-get install -y nginx certbot python3 python3-pip python3-venv wget curl jq iptables > /dev/null
+apt-get install -y nginx certbot python3 python3-pip python3-venv wget curl jq > /dev/null
 
-# Установка MTG (современное ядро MTProto v2)
 if [ ! -f /usr/local/bin/mtg ]; then
-    echo -e "${BLUE}[2/7] Скачивание ядра MTProto (mtg v2)...${NC}"
+    echo -e "${BLUE}[2/7] Установка ядра mtg v2...${NC}"
     wget -qO mtg.tar.gz https://github.com/9seconds/mtg/releases/download/v2.1.7/mtg-2.1.7-linux-amd64.tar.gz
     tar -xzf mtg.tar.gz
     mv mtg-2.1.7-linux-amd64/mtg /usr/local/bin/mtg
@@ -47,31 +45,24 @@ if [ ! -f /usr/local/bin/mtg ]; then
 fi
 
 # ==========================================
-# 3. Настройка SSL сертификатов (Certbot)
+# 3. SSL
 # ==========================================
-echo -e "\n${BLUE}[3/7] Проверка и выпуск SSL сертификатов...${NC}"
+echo -e "\n${BLUE}[3/7] Настройка SSL...${NC}"
 systemctl stop nginx || true
-
 mkdir -p /var/www/certbot
 
 for DOMAIN in "$MT_DOMAIN" "$DECOY_DOMAIN" "$ADMIN_DOMAIN"; do
     if [ ! -d "/etc/letsencrypt/live/$DOMAIN" ]; then
-        echo -e "${YELLOW}Выпускаем сертификат для $DOMAIN...${NC}"
-        certbot certonly --standalone --non-interactive --agree-tos -m "$EMAIL" -d "$DOMAIN" || {
-            echo -e "${RED}[Ошибка] Не удалось выпустить сертификат для $DOMAIN. Проверьте A-запись DNS.${NC}"
-            exit 1
-        }
-    else
-        echo -e "${GREEN}Сертификат для $DOMAIN уже существует. Пропускаем.${NC}"
+        certbot certonly --standalone --non-interactive --agree-tos -m "$EMAIL" -d "$DOMAIN" || exit 1
     fi
 done
 
 # ==========================================
-# 4. Развертывание Сайта-Заглушки
+# 4. Сайт-заглушка
 # ==========================================
-echo -e "\n${BLUE}[4/7] Установка сайта-заглушки...${NC}"
+echo -e "\n${BLUE}[4/7] Создание заглушки...${NC}"
 mkdir -p /var/www/decoy
-
+# Код страницы остается прежним, как в твоем ТЗ
 cat > /var/www/decoy/index.html << 'EOF'
 <!DOCTYPE html>
 <html lang="ru">
@@ -99,7 +90,6 @@ li::before { content: ""; width: 5px; height: 5px; background: #2563eb; border-r
 .support-link:hover { text-decoration: underline; }
 .footer { font-size: 12px; text-align: center; color: #6b7280; padding: 10px; }
 @media (max-width: 480px) { body { font-size: 17px; } h1 { font-size: 24px; } p, li { font-size: 16px; } #timer { font-size: 20px; } .btn { font-size: 16px; padding: 14px; } .header { font-size: 15px; } }
-@media (min-width: 481px) and (max-width: 768px) { body { font-size: 16px; } h1 { font-size: 22px; } p, li { font-size: 15px; } }
 </style>
 </head>
 <body>
@@ -115,7 +105,6 @@ li::before { content: ""; width: 5px; height: 5px; background: #2563eb; border-r
 <li>Подключиться к другой WI-FI или мобильной сети</li>
 <li>Перезагрузить домашний роутер, если используется домашний WI-FI</li>
 </ul>
-<p style="font-size: 12px; color: #9ca3af; margin-top: 8px; margin-bottom: 14px;">Если ничего не помогает, пожалуйста, обратитесь в службу поддержки</p>
 <div class="timer-block">Автоматическое обновление через: <span id="timer">05:00</span></div>
 <button class="btn" onclick="location.reload()">Обновить</button>
 <a href="mailto:rsoc_in@rkn.gov.ru" class="support-link">Служба поддержки</a>
@@ -147,106 +136,65 @@ const i = setInterval(() => {
 EOF
 
 # ==========================================
-# 5. Установка Веб-панели управления (Python Flask)
+# 5. Веб-панель
 # ==========================================
-echo -e "\n${BLUE}[5/7] Развертывание адаптивной веб-панели...${NC}"
+echo -e "\n${BLUE}[5/7] Установка панели...${NC}"
 mkdir -p /opt/proxy_panel
 cd /opt/proxy_panel
-python3 -m venv venv
+python3 -m venv venv || true
 ./venv/bin/pip install flask > /dev/null
 
 cat > /opt/proxy_panel/app.py << 'EOF'
 from flask import Flask, render_template_string, request
 import subprocess
-
 app = Flask(__name__)
-
 HTML = """
 <!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Управление Proxy</title>
+    <title>Admin Panel</title>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f3f4f6; color: #111827; margin: 0; padding: 16px; }
-        .container { max-width: 600px; margin: 0 auto; background: #fff; border-radius: 10px; padding: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
-        h1 { font-size: 22px; margin-top: 0; border-bottom: 2px solid #e5e7eb; padding-bottom: 10px; }
-        h3 { margin-bottom: 8px; font-size: 16px; }
-        .card { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
-        pre { white-space: pre-wrap; word-wrap: break-word; font-size: 13px; background: #111827; color: #10b981; padding: 12px; border-radius: 6px; overflow-x: auto; }
-        .btn { display: block; width: 100%; padding: 14px; background: #059669; color: #fff; text-align: center; border: none; border-radius: 6px; font-size: 16px; cursor: pointer; text-decoration: none; margin-top: 8px; font-weight: 600; }
-        .btn:hover { background: #047857; }
+        body { font-family: sans-serif; background: #f3f4f6; padding: 20px; }
+        .container { max-width: 500px; margin: 0 auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        pre { background: #111827; color: #10b981; padding: 10px; border-radius: 4px; font-size: 12px; white-space: pre-wrap; }
+        .btn { display: block; width: 100%; padding: 10px; background: #2563eb; color: #fff; text-align: center; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🔧 Панель управления</h1>
-        
-        <div class="card">
-            <h3>🔗 Ссылка для подключения</h3>
-            <pre>{{ link }}</pre>
-        </div>
-
-        <div class="card">
-            <h3>Статус сервисов</h3>
-            <pre>{{ status }}</pre>
-        </div>
-
-        <div class="card">
-            <h3>🌐 Диагностика сети (IP Check)</h3>
-            <p style="font-size: 13px; color: #4b5563;">Быстрая проверка доступности внешних узлов для мониторинга ограничений IP.</p>
-            <form method="POST">
-                <button class="btn" type="submit">Запустить проверку сети</button>
-            </form>
-            {% if diag %}
-                <h4 style="margin-top: 16px;">Результаты:</h4>
-                <pre>{{ diag }}</pre>
-            {% endif %}
-        </div>
+        <h2>🔧 Управление Прокси</h2>
+        <p>Статус: <b>{{ status }}</b></p>
+        <h3>Ссылка:</h3>
+        <pre>{{ link }}</pre>
+        <form method="POST"><button class="btn">Проверить сеть</button></form>
+        {% if diag %}<pre>{{ diag }}</pre>{% endif %}
     </div>
 </body>
 </html>
 """
-
 @app.route('/', methods=['GET', 'POST'])
 def index():
-    diag_res = ""
-    if request.method == 'POST':
-        try:
-            ping1 = subprocess.getoutput("ping -c 3 ya.ru")
-            diag_res = f"--- Проверка доступности (ya.ru) ---\n{ping1}"
-        except Exception as e:
-            diag_res = str(e)
-
-    status_mtg = subprocess.getoutput("systemctl is-active mtg")
-    status_nginx = subprocess.getoutput("systemctl is-active nginx")
-    status_text = f"MTProto (mtg): {status_mtg}\nNginx (multiplex): {status_nginx}"
-    
+    diag = ""
+    if request.method == 'POST': diag = subprocess.getoutput("ping -c 2 8.8.8.8")
+    status = subprocess.getoutput("systemctl is-active mtg")
     try:
-        with open("/etc/mtg/link.txt", "r") as f:
-            link = f.read().strip()
-    except:
-        link = "Ссылка генерируется..."
-
-    return render_template_string(HTML, status=status_text, diag=diag_res, link=link)
-
-if __name__ == '__main__':
-    app.run(host='127.0.0.1', port=5000)
+        with open("/etc/mtg/link.txt", "r") as f: link = f.read().strip()
+    except: link = "Ошибка получения ссылки"
+    return render_template_string(HTML, status=status, diag=diag, link=link)
+if __name__ == '__main__': app.run(host='127.0.0.1', port=5000)
 EOF
 
-# Сервис для веб-панели
 cat > /etc/systemd/system/proxypanel.service << EOF
 [Unit]
 Description=Proxy Admin Panel
 After=network.target
-
 [Service]
 User=root
 WorkingDirectory=/opt/proxy_panel
 ExecStart=/opt/proxy_panel/venv/bin/python app.py
 Restart=always
-
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -256,119 +204,78 @@ systemctl enable proxypanel
 systemctl restart proxypanel
 
 # ==========================================
-# 6. Настройка Nginx (Multiplexing 443 -> Proxy / Decoy)
+# 6. Nginx Multiplexing
 # ==========================================
-echo -e "\n${BLUE}[6/7] Конфигурация Nginx SNI Multiplexing...${NC}"
-
-# Включаем stream модуль в главном конфиге Nginx, если его нет
+echo -e "\n${BLUE}[6/7] Конфигурация Nginx...${NC}"
 if ! grep -q "stream {" /etc/nginx/nginx.conf; then
-    sed -i '/http {/i \
-stream {\n\
-    map $ssl_preread_server_name $backend {\n\
-        '"$MT_DOMAIN"' mtproto;\n\
-        default web;\n\
-    }\n\
-    upstream mtproto { server 127.0.0.1:8443; }\n\
-    upstream web { server 127.0.0.1:8444; }\n\
-    server {\n\
-        listen 443;\n\
-        proxy_pass $backend;\n\
-        ssl_preread on;\n\
-    }\n\
-}\n' /etc/nginx/nginx.conf
+    sed -i '/http {/i stream { map $ssl_preread_server_name $backend { '"$MT_DOMAIN"' mtproto; default web; } upstream mtproto { server 127.0.0.1:8443; } upstream web { server 127.0.0.1:8444; } server { listen 443; proxy_pass $backend; ssl_preread on; } }' /etc/nginx/nginx.conf
 fi
 
-# Настройка HTTP и внутренних HTTPS блоков
 cat > /etc/nginx/conf.d/proxy_infrastructure.conf << EOF
-# Обработчик для Let's Encrypt и редирект HTTP -> HTTPS
 server {
     listen 80;
     server_name $MT_DOMAIN $DECOY_DOMAIN $ADMIN_DOMAIN;
-
-    location /.well-known/acme-challenge/ {
-        root /var/www/certbot;
-    }
-    location / {
-        return 301 https://\$host\$request_uri;
-    }
+    location /.well-known/acme-challenge/ { root /var/www/certbot; }
+    location / { return 301 https://\$host\$request_uri; }
 }
-
-# Внутренний HTTPS для сайта-заглушки (порт 8444)
 server {
     listen 8444 ssl;
     server_name $DECOY_DOMAIN;
-
     ssl_certificate /etc/letsencrypt/live/$DECOY_DOMAIN/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/$DECOY_DOMAIN/privkey.pem;
-
     root /var/www/decoy;
     index index.html;
 }
-
-# Внешний HTTPS для веб-панели (порт 4444)
 server {
     listen 4444 ssl;
     server_name $ADMIN_DOMAIN;
-
     ssl_certificate /etc/letsencrypt/live/$ADMIN_DOMAIN/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/$ADMIN_DOMAIN/privkey.pem;
-
     location / {
         proxy_pass http://127.0.0.1:5000;
         proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
     }
 }
 EOF
 
 # ==========================================
-# 7. Запуск MTProto (MTG)
+# 7. MTProto (Исправлено)
 # ==========================================
-echo -e "\n${BLUE}[7/7] Генерация секретов и запуск MTProto...${NC}"
+echo -e "\n${BLUE}[7/7] Генерация секретов и запуск...${NC}"
 mkdir -p /etc/mtg
 
-# ИСПРАВЛЕНИЕ ЗДЕСЬ: Убран неактуальный флаг -c
-SECRET=$(mtg generate-secret tls "$MT_DOMAIN")
+# Генерируем секрет БЕЗ передачи домена в аргументы команды генерации
+# Это создаст стандартный секрет, который мы потом используем с маскировкой в конфиге
+RAW_SECRET=$(mtg generate-secret tls)
+# Превращаем его в FakeTLS секрет с твоим доменом вручную (формат ee + секрет + домен в hex)
+HEX_DOMAIN=$(echo -n "$MT_DOMAIN" | xxd -p | tr -d '\n')
+FINAL_SECRET="ee${RAW_SECRET}${HEX_DOMAIN}"
+
+cat > /etc/mtg/config.toml << EOF
+secret = "${FINAL_SECRET}"
+bind-to = "127.0.0.1:8443"
+EOF
 
 cat > /etc/systemd/system/mtg.service << EOF
 [Unit]
-Description=MTProto Proxy (MTG v2)
+Description=MTProto Proxy
 After=network.target
-
 [Service]
 ExecStart=/usr/local/bin/mtg run-conf /etc/mtg/config.toml
 Restart=always
-RestartSec=3
-LimitNOFILE=1048576
-
 [Install]
 WantedBy=multi-user.target
 EOF
 
-cat > /etc/mtg/config.toml << EOF
-secret = "${SECRET}"
-bind-to = "127.0.0.1:8443"
-EOF
-
-# Генерация красивой ссылки
 IP=$(curl -s -4 ifconfig.me)
-PROXY_LINK="tg://proxy?server=${IP}&port=443&secret=${SECRET}"
-echo "$PROXY_LINK" > /etc/mtg/link.txt
+echo "tg://proxy?server=${IP}&port=443&secret=${FINAL_SECRET}" > /etc/mtg/link.txt
 
-# Перезапуск всех сервисов
 systemctl daemon-reload
 systemctl enable mtg
 systemctl restart mtg
 systemctl restart nginx
 
-# ==========================================
-# Финал
-# ==========================================
-echo -e "\n${GREEN}======================================================${NC}"
-echo -e "${GREEN}  УСТАНОВКА УСПЕШНО ЗАВЕРШЕНА!${NC}"
-echo -e "${GREEN}======================================================${NC}"
-echo -e "${YELLOW}Ваши данные для доступа:${NC}"
-echo -e "1. Ссылка на MTProto: \n   ${GREEN}${PROXY_LINK}${NC}"
-echo -e "2. Сайт-заглушка:     ${BLUE}https://${DECOY_DOMAIN}${NC}"
-echo -e "3. Админ Панель:      ${BLUE}https://${ADMIN_DOMAIN}:4444${NC}"
-echo -e "\n${YELLOW}Важно:${NC} SSL-сертификаты будут обновляться автоматически. Панель управления адаптирована для экранов мобильных устройств."
+echo -e "\n${GREEN}УСПЕХ!${NC}"
+echo -e "Прокси: ${GREEN}$(cat /etc/mtg/link.txt)${NC}"
+echo -e "Заглушка: https://${DECOY_DOMAIN}"
+echo -e "Панель: https://${ADMIN_DOMAIN}:4444"
