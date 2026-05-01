@@ -469,6 +469,20 @@ def telemt_api_patch(path, data):
 def telemt_api_delete(path):
     return telemt_api_request("DELETE", path)
 
+def telemt_create_user(username, secret, expiration_rfc3339):
+    return telemt_api_post("/v1/users", {
+        "username": username,
+        "secret": secret,
+        "expiration_rfc3339": expiration_rfc3339,
+    })
+
+def telemt_replace_user(username, secret, expiration_rfc3339):
+    try:
+        telemt_api_delete("/v1/users/" + urllib.parse.quote(username))
+    except Exception:
+        pass
+    return telemt_create_user(username, secret, expiration_rfc3339)
+
 def make_link(secret):
     host = get_setting("proxy_host", "127.0.0.1")
     port = get_setting("proxy_port", "443")
@@ -599,14 +613,7 @@ def create_access():
     now = utcnow()
     expires = now + timedelta(days=30)
     try:
-        telemt_api_post(
-            "/v1/users",
-            {
-                "username": username,
-                "secret": secret,
-                "expiration_rfc3339": fmt_rfc3339(expires),
-            },
-        )
+        telemt_create_user(username, secret, fmt_rfc3339(expires))
     except Exception as exc:
         flash(f"Не удалось создать доступ: {exc}", "danger")
         conn.close()
@@ -657,8 +664,8 @@ def toggle_access(username):
                 "UPDATE accesses SET status=?, paused_since=?, paused_remaining_seconds=?, auto_paused_at=NULL WHERE username=?",
                 ("paused", fmt_rfc3339(now), int(remaining), username),
             )
-            telemt_api_patch("/v1/users/" + urllib.parse.quote(username), {"expiration_rfc3339": fmt_rfc3339(now - timedelta(minutes=1))})
-            flash(f"Доступ {username} поставлен на паузу", "success")
+            telemt_api_delete("/v1/users/" + urllib.parse.quote(username))
+            flash(f"Доступ {username} поставлен на паузу и соединение разорвано", "success")
         else:
             if row["status"] == "auto_paused":
                 new_expires = now + timedelta(days=30)
@@ -676,7 +683,7 @@ def toggle_access(username):
                     """,
                     (fmt_rfc3339(now), fmt_rfc3339(new_expires), username),
                 )
-                telemt_api_patch("/v1/users/" + urllib.parse.quote(username), {"expiration_rfc3339": fmt_rfc3339(new_expires)})
+                telemt_create_user(username, row["secret"], fmt_rfc3339(new_expires))
                 flash(f"Доступ {username} включен и таймер сброшен на новый цикл", "success")
             else:
                 paused_since = parse_dt(row["paused_since"]) or now
@@ -696,7 +703,7 @@ def toggle_access(username):
                     """,
                     (paused_total_seconds, fmt_rfc3339(new_expires), username),
                 )
-                telemt_api_patch("/v1/users/" + urllib.parse.quote(username), {"expiration_rfc3339": fmt_rfc3339(new_expires)})
+                telemt_create_user(username, row["secret"], fmt_rfc3339(new_expires))
                 flash(f"Доступ {username} возобновлен", "success")
         conn.commit()
     except Exception as exc:
@@ -827,7 +834,10 @@ def auto_maintain():
                             row["username"],
                         ),
                     )
-                    telemt_api_patch("/v1/users/" + urllib.parse.quote(row["username"]), {"expiration_rfc3339": fmt_rfc3339(now - timedelta(minutes=1))})
+                    try:
+                        telemt_api_delete("/v1/users/" + urllib.parse.quote(row["username"]))
+                    except Exception:
+                        pass
                     changed = True
             elif row["status"] == "auto_paused":
                 paused_at = parse_dt(row["auto_paused_at"]) or parse_dt(row["paused_since"]) or utcnow()
@@ -863,53 +873,56 @@ cat > "${PANEL_DIR}/templates/layout.html" <<'HTMLEOF'
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" rel="stylesheet">
   <style>
     :root{
-      --tg-bg:#0f172a;
-      --tg-card:#111827;
-      --tg-card-2:#0b1220;
-      --tg-line:rgba(148,163,184,.18);
-      --tg-text:#e5eefc;
-      --tg-muted:#94a3b8;
+      --tg-bg:#f4f8fd;
+      --tg-card:#ffffff;
+      --tg-line:#dbe5f1;
+      --tg-text:#0f172a;
+      --tg-muted:#64748b;
       --tg-blue:#2aabee;
       --tg-green:#22c55e;
       --tg-red:#ef4444;
-      --tg-yellow:#f59e0b;
     }
     body{
       min-height:100vh;
       background:
-        radial-gradient(circle at top left, rgba(42,171,238,.20), transparent 32%),
-        radial-gradient(circle at top right, rgba(34,197,94,.12), transparent 26%),
-        linear-gradient(180deg, #09111f 0%, #0f172a 100%);
+        radial-gradient(circle at top left, rgba(42,171,238,.16), transparent 28%),
+        radial-gradient(circle at top right, rgba(34,197,94,.12), transparent 24%),
+        linear-gradient(180deg, #eef5fb 0%, #f7fbff 100%);
       color:var(--tg-text);
       font-family: Inter, "Segoe UI", system-ui, -apple-system, sans-serif;
     }
     .navbar, .card, .modal-content{
-      background: rgba(17,24,39,.88) !important;
+      background: rgba(255,255,255,.94) !important;
       backdrop-filter: blur(14px);
       border: 1px solid var(--tg-line);
-      box-shadow: 0 18px 60px rgba(0,0,0,.26);
+      box-shadow: 0 14px 45px rgba(15,23,42,.08);
     }
+    .navbar{ background: linear-gradient(90deg, var(--tg-blue), #6bc5f5) !important; color:#fff !important; }
+    .navbar .navbar-brand, .navbar .btn, .navbar .chip{ color:#fff; }
+    .navbar .btn{ border-color: rgba(255,255,255,.45); }
+    .navbar .btn:hover{ background: rgba(255,255,255,.12); }
     .card{ border-radius: 22px; }
     .navbar{ border-radius: 0 0 22px 22px; }
     .page-shell{ max-width: 1360px; }
     .text-muted{ color: var(--tg-muted) !important; }
     .btn{
       border-radius: 14px;
-      font-weight: 600;
+      font-weight: 700;
     }
     .btn-primary{ background: var(--tg-blue); border-color: var(--tg-blue); }
-    .btn-outline-light:hover{ background: rgba(255,255,255,.08); }
+    .btn-outline-light{ color:#fff; border-color: rgba(255,255,255,.45); }
+    .btn-outline-secondary{ border-color: #cbd5e1; }
     .form-control, .form-select{
-      background: rgba(10,15,25,.85);
+      background: #fff;
       color: var(--tg-text);
       border: 1px solid var(--tg-line);
       border-radius: 14px;
     }
     .form-control:focus, .form-select:focus{
-      background: rgba(10,15,25,.95);
+      background: #fff;
       color: var(--tg-text);
       border-color: var(--tg-blue);
-      box-shadow: 0 0 0 .2rem rgba(42,171,238,.18);
+      box-shadow: 0 0 0 .2rem rgba(42,171,238,.16);
     }
     .table{
       color: var(--tg-text);
@@ -923,57 +936,27 @@ cat > "${PANEL_DIR}/templates/layout.html" <<'HTMLEOF'
       letter-spacing: .04em;
       white-space: nowrap;
     }
-    .table tbody tr:hover{ background: rgba(255,255,255,.03); }
-    .badge-soft{
-      background: rgba(42,171,238,.14);
-      color: #bde5fb;
-      border: 1px solid rgba(42,171,238,.28);
-    }
+    .table tbody tr:hover{ background: rgba(42,171,238,.04); }
     .summary-card{
       border-radius: 22px;
       padding: 1rem 1.1rem;
       height: 100%;
     }
     .summary-label{ color: var(--tg-muted); font-size: .84rem; }
-    .summary-value{ font-size: 1.45rem; font-weight: 800; line-height: 1.1; }
+    .summary-value{ font-size: 1.45rem; font-weight: 800; line-height: 1.1; word-break: break-word; }
     .access-name{ font-weight: 800; font-size: 1.03rem; }
     .access-meta{ color: var(--tg-muted); font-size: .86rem; }
-    .dot{
-      display:inline-block; width:10px; height:10px; border-radius:999px; margin-right:.4rem;
-    }
+    .dot{ display:inline-block; width:10px; height:10px; border-radius:999px; margin-right:.4rem; }
     .dot.green{ background: var(--tg-green); box-shadow: 0 0 0 4px rgba(34,197,94,.18); }
     .dot.red{ background: var(--tg-red); box-shadow: 0 0 0 4px rgba(239,68,68,.18); }
-    .dot.gray{ background: #64748b; box-shadow: 0 0 0 4px rgba(100,116,139,.18); }
-    .chip{
-      display:inline-flex;
-      align-items:center;
-      gap:.35rem;
-      padding:.28rem .55rem;
-      border-radius:999px;
-      font-size:.82rem;
-      border:1px solid var(--tg-line);
-      background: rgba(255,255,255,.03);
-      white-space: nowrap;
-    }
-    .footer{
-      color: var(--tg-muted);
-      font-size: .9rem;
-      text-align:center;
-      padding: 1rem 0 1.6rem;
-    }
-    .nowrap{ white-space: nowrap; }
+    .chip{ display:inline-flex; align-items:center; gap:.35rem; padding:.28rem .55rem; border-radius:999px; font-size:.82rem; border:1px solid var(--tg-line); background: rgba(255,255,255,.6); white-space: nowrap; }
+    .footer{ color: var(--tg-muted); font-size: .9rem; text-align:center; padding: 1rem 0 1.6rem; }
     .table-responsive{ border-radius: 18px; overflow: hidden; }
     .small-btns .btn{ padding: .4rem .58rem; }
     .copy-field input{ border-right: 0; }
     .copy-field .btn{ border-left: 0; }
-    .section-title{
-      display:flex; align-items:center; gap:.65rem;
-      font-size: 1.08rem; font-weight: 800;
-    }
-    .sni-pill{
-      cursor:pointer;
-      user-select:none;
-    }
+    .section-title{ display:flex; align-items:center; gap:.65rem; font-size: 1.08rem; font-weight: 800; }
+    .sni-pill{ cursor:pointer; user-select:none; }
     .sni-pill:hover{ transform: translateY(-1px); }
     @media (max-width: 992px){
       .summary-value{ font-size: 1.2rem; }
@@ -983,17 +966,17 @@ cat > "${PANEL_DIR}/templates/layout.html" <<'HTMLEOF'
   </style>
 </head>
 <body>
-  <nav class="navbar navbar-expand-lg navbar-dark sticky-top mb-4">
+  <nav class="navbar navbar-expand-lg sticky-top mb-4">
     <div class="container-fluid page-shell px-3 px-lg-4 py-2">
       <a class="navbar-brand fw-bold d-flex align-items-center gap-2" href="{{ url_for('dashboard') }}">
         <i class="fa-brands fa-telegram"></i> MTProto Proxy Panel
       </a>
       {% if session.get('admin') %}
-      <div class="ms-auto d-flex align-items-center gap-2">
+      <div class="ms-auto d-flex align-items-center gap-2 flex-wrap justify-content-end">
         <span class="chip"><span class="dot {{ 'green' if server_status == 'Работает' else 'red' }}"></span>{{ server_status }}</span>
-        <a class="btn btn-outline-light btn-sm" href="{{ url_for('settings') }}"><i class="fa-solid fa-sliders me-1"></i>Настройки</a>
-        <a class="btn btn-outline-light btn-sm" href="{{ url_for('admin_credentials') }}"><i class="fa-solid fa-user-gear me-1"></i>Админ</a>
-        <a class="btn btn-outline-light btn-sm" href="{{ url_for('logout') }}"><i class="fa-solid fa-right-from-bracket me-1"></i>Выход</a>
+        <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('settings') }}"><i class="fa-solid fa-sliders me-1"></i>Настройки</a>
+        <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('admin_credentials') }}"><i class="fa-solid fa-user-gear me-1"></i>Админ</a>
+        <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('logout') }}"><i class="fa-solid fa-right-from-bracket me-1"></i>Выход</a>
       </div>
       {% endif %}
     </div>
@@ -1089,7 +1072,7 @@ cat > "${PANEL_DIR}/templates/dashboard.html" <<'HTMLEOF'
 
 <div class="card mb-4">
   <div class="card-body p-4 p-md-5">
-    <div class="section-title mb-3"><i class="fa-solid fa-plus"></i>Создать новый доступ</div>
+    <div class="section-title mb-3"><i class="fa-solid fa-plus text-primary"></i>Создать новый доступ</div>
     <form method="post" action="{{ url_for('create_access') }}" class="row g-3 align-items-end">
       <div class="col-12 col-md-5">
         <label class="form-label text-muted mb-1">Имя</label>
@@ -1112,9 +1095,9 @@ cat > "${PANEL_DIR}/templates/dashboard.html" <<'HTMLEOF'
 
 <div class="card mb-4">
   <div class="card-body p-4 p-md-5">
-    <div class="section-title mb-3"><i class="fa-solid fa-list"></i>Список доступов</div>
-    <div class="table-responsive">
-      <table class="table align-middle">
+    <div class="section-title mb-3"><i class="fa-solid fa-list text-primary"></i>Список доступов</div>
+    <div class="table-responsive shadow-sm">
+      <table class="table table-hover align-middle">
         <thead>
           <tr>
             <th>Имя устройства</th>
@@ -1146,10 +1129,10 @@ cat > "${PANEL_DIR}/templates/dashboard.html" <<'HTMLEOF'
             <td style="min-width: 320px;">
               <div class="input-group copy-field">
                 <input class="form-control" id="link-{{ loop.index }}" value="{{ item.link }}" readonly>
-                <button class="btn btn-outline-light" type="button" onclick="copyLink('link-{{ loop.index }}', this)">
+                <button class="btn btn-outline-secondary" type="button" onclick="copyLink('link-{{ loop.index }}', this)">
                   <i class="fa-solid fa-copy me-1"></i>Копия
                 </button>
-                <button class="btn btn-outline-light" type="button" data-bs-toggle="modal" data-bs-target="#qrModal" data-qr-url="{{ url_for('qr_public', username=item.username) }}" data-qr-name="{{ item.username }}">
+                <button class="btn btn-outline-secondary" type="button" data-bs-toggle="modal" data-bs-target="#qrModal" data-qr-url="{{ url_for('qr_public', username=item.username) }}" data-qr-name="{{ item.username }}">
                   <i class="fa-solid fa-qrcode me-1"></i>QR
                 </button>
               </div>
@@ -1194,7 +1177,7 @@ cat > "${PANEL_DIR}/templates/dashboard.html" <<'HTMLEOF'
     <div class="modal-content">
       <div class="modal-header border-0">
         <h5 class="modal-title">QR-код подключения</h5>
-        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="modal-body text-center">
         <img id="qrImage" src="" alt="QR" class="img-fluid rounded-4 border border-light-subtle">
@@ -1539,13 +1522,13 @@ systemctl daemon-reload
 systemctl enable telemt-panel --now
 sleep 2
 if systemctl is-active --quiet telemt-panel; then
-  log "${GREEN}Панель запущена.${RESET}"
+  log "${GREEN}Панель запущена и отвечает.${RESET}"
 else
   log "${RED}Панель не стартовала. Смотри journalctl -u telemt-panel.${RESET}"
   journalctl -u telemt-panel --no-pager -n 20 || true
   exit 1
 fi
-step_done "Панель запущена"
+step_done "Панель готова"
 
 cat > /etc/cron.d/telemt-panel-maintain <<EOF
 * * * * * root /usr/local/bin/telemt-panel-maintain.py >/dev/null 2>&1
