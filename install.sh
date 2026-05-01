@@ -118,6 +118,9 @@ case "${FAKE_CHOICE:-5}" in
   *) FAKE_DOMAIN="max.ru" ;;
 esac
 
+INITIAL_USERNAME="default_phone"
+INITIAL_SECRET="$(openssl rand -hex 16)"
+
 log "${CYAN}Параметры:${RESET}"
 log "  Прокси: ${PROXY_DOMAIN}:443"
 log "  Панель: https://${PANEL_DOMAIN}:${PANEL_PORT}"
@@ -200,6 +203,7 @@ tls_emulation = true
 tls_front_dir = "tlsfront"
 
 [access.users]
+${INITIAL_USERNAME} = "${INITIAL_SECRET}"
 EOF
 
 cat > /etc/systemd/system/telemt.service <<EOF
@@ -1573,47 +1577,20 @@ generate_bootstrap() {
   "${PANEL_DIR}/venv/bin/python" <<PY
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-import json
 import sqlite3
-import urllib.request
-import urllib.parse
-import secrets
-import sys
 
 db_path = Path("${APP_DIR}") / "panel.db"
 conn = sqlite3.connect(db_path)
 conn.row_factory = sqlite3.Row
 settings = {row["key"]: row["value"] for row in conn.execute("SELECT key, value FROM settings")}
-token = settings["telemt_api_token"]
 proxy_host = settings["proxy_host"]
 proxy_port = settings["proxy_port"]
 fake_domain = settings["fake_tls_domain"]
-username = "default_phone"
-secret = secrets.token_hex(16)
-expires = datetime.now(timezone.utc) + timedelta(days=30)
-payload = {
-    "username": username,
-    "secret": secret,
-    "expiration_rfc3339": expires.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
-}
-try:
-    req_del = urllib.request.Request(
-        f"http://127.0.0.1:9091/v1/users/{urllib.parse.quote(username)}",
-        headers={"Authorization": token},
-        method="DELETE",
-    )
-    urllib.request.urlopen(req_del, timeout=12).read()
-except Exception:
-    pass
-req = urllib.request.Request(
-    "http://127.0.0.1:9091/v1/users",
-    data=json.dumps(payload).encode("utf-8"),
-    headers={"Authorization": token, "Content-Type": "application/json"},
-    method="POST",
-)
-with urllib.request.urlopen(req, timeout=12) as resp:
-    raw = resp.read().decode("utf-8")
-link = f"tg://proxy?server={proxy_host}&port={proxy_port}&secret=ee{secret}{fake_domain.encode('utf-8').hex()}"
+username = "${INITIAL_USERNAME}"
+secret = "${INITIAL_SECRET}"
+created_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00","Z")
+expires_at = (datetime.now(timezone.utc) + timedelta(days=30)).replace(microsecond=0).isoformat().replace("+00:00","Z")
+
 conn.execute(
     """
     INSERT INTO accesses(username, device, secret, created_at, duration_seconds, paused_total_seconds, paused_since, paused_remaining_seconds, auto_paused_at, status, expires_at)
@@ -1630,10 +1607,12 @@ conn.execute(
       status=excluded.status,
       expires_at=excluded.expires_at
     """,
-    (username, "Phone", secret, datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00","Z"), 30*24*3600, 0, None, None, None, "active", expires.replace(microsecond=0).isoformat().replace("+00:00", "Z")),
+    (username, "Phone", secret, created_at, 30*24*3600, 0, None, None, None, "active", expires_at),
 )
 conn.commit()
 conn.close()
+
+link = f"tg://proxy?server={proxy_host}&port={proxy_port}&secret=ee{secret}{fake_domain.encode('utf-8').hex()}"
 print(link)
 PY
 }
