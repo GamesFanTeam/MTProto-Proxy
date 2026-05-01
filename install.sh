@@ -14,14 +14,14 @@ RESET='\033[0m'
 # ── Баннер ──────────────────────────────────────────────────────────────
 show_banner() {
     clear
-    echo -e "${CYAN}${BOLD}"
-    echo "  ███╗   ███╗████████╗██████╗ ██████╗  ██████╗ ████████╗ ██████╗ "
-    echo "  ████╗ ████║╚══██╔══╝██╔══██╗██╔══██╗██╔═══██╗╚══██╔══╝██╔═══██╗"
-    echo "  ██╔████╔██║   ██║   ██████╔╝██████╔╝██║   ██║   ██║   ██║   ██║"
-    echo "  ██║╚██╔╝██║   ██║   ██╔═══╝ ██╔══██╗██║   ██║   ██║   ██║   ██║"
-    echo "  ██║ ╚═╝ ██║   ██║   ██║     ██║  ██║╚██████╔╝   ██║   ╚██████╔╝"
-    echo "  ╚═╝     ╚═╝   ╚═╝   ╚═╝     ╚═╝  ╚═╝ ╚═════╝    ╚═╝   ╚═════╝  "
-    echo -e "${RESET}${MAGENTA}        MTProto Proxy Telegram Installer by Mr_EFES (Production)"
+    echo -e "${GREEN}${BOLD}"
+    echo "  ████████╗███████╗██╗     ███████╗███╗   ███╗████████╗"
+    echo "  ╚══██╔══╝██╔════╝██║     ██╔════╝████╗ ████║╚══██╔══╝"
+    echo "     ██║   █████╗  ██║     █████╗  ██╔████╔██║   ██║   "
+    echo "     ██║   ██╔══╝  ██║     ██╔══╝  ██║╚██╔╝██║   ██║   "
+    echo "     ██║   ███████╗███████╗███████╗██║ ╚═╝ ██║   ██║   "
+    echo "     ╚═╝   ╚══════╝╚══════╝╚══════╝╚═╝     ╚═╝   ╚═╝   "
+    echo -e "${RESET}${CYAN}        MTProto Proxy Darknet Edition Installer${RESET}"
     echo -e "${RESET}"
 }
 
@@ -83,8 +83,8 @@ read -rp "Введите Email для SSL-сертификатов Let's Encrypt
 
 echo ""
 echo -e "${CYAN}Параметры установки:${RESET}"
-echo -e "  ${BLUE}Прокси домен:${RESET} ${PROXY_DOMAIN} (порт 443)"
-echo -e "  ${BLUE}Панель домен:${RESET} ${PANEL_DOMAIN} (порт ${PANEL_PORT})"
+echo -e "  ${GREEN}Прокси домен:${RESET} ${PROXY_DOMAIN} (порт 443)"
+echo -e "  ${GREEN}Панель домен:${RESET} ${PANEL_DOMAIN} (порт ${PANEL_PORT})"
 echo ""
 
 # ==========================================
@@ -116,22 +116,26 @@ echo ""
 # ==========================================
 echo -e "${BOLD}--- УСТАНОВКА MTProto ПРОКСИ ---${RESET}"
 
-echo -e "${BOLD}Выберите домен для Fake TLS маскировки:${RESET}"
-echo "1) max.ru"
-echo "2) vk.com"
+echo -e "${BOLD}Выберите домен для Fake TLS маскировки (Глобальный):${RESET}"
+echo "1) ads.x5.ru"
+echo "2) 1c.ru"
 echo "3) ozon.ru"
-echo "4) Свой вариант"
+echo "4) vk.com"
+echo "5) max.ru"
+echo "6) Свой вариант"
 while true; do
-    read -rp "Ваш выбор [1-4]: " FAKE_CHOICE
+    read -rp "Ваш выбор [1-6]: " FAKE_CHOICE
     case "${FAKE_CHOICE}" in
-        1) FAKE_DOMAIN="max.ru"; break ;;
-        2) FAKE_DOMAIN="vk.com"; break ;;
+        1) FAKE_DOMAIN="ads.x5.ru"; break ;;
+        2) FAKE_DOMAIN="1c.ru"; break ;;
         3) FAKE_DOMAIN="ozon.ru"; break ;;
-        4)
+        4) FAKE_DOMAIN="vk.com"; break ;;
+        5) FAKE_DOMAIN="max.ru"; break ;;
+        6)
             read -rp "Введите свой домен для маскировки (напр. google.com): " FAKE_DOMAIN
             if [[ -n "$FAKE_DOMAIN" ]]; then break; else echo -e "${RED}Домен не может быть пустым.${RESET}"; fi
             ;;
-        *) echo -e "${RED}Неверный выбор. Введите число от 1 до 4.${RESET}" ;;
+        *) echo -e "${RED}Неверный выбор. Введите число от 1 до 6.${RESET}" ;;
     esac
 done
 
@@ -200,22 +204,16 @@ FINAL_SECRET="ee${USER_SECRET}${HEX_DOMAIN}"
 TG_LINK="tg://proxy?server=${PROXY_DOMAIN}&port=443&secret=${FINAL_SECRET}"
 
 echo ""
-echo -e "${CYAN}${BOLD}Ссылка для подключения к прокси:${RESET}"
-echo -e "\e]8;;${TG_LINK}\a${GREEN}${TG_LINK}${RESET}\e]8;;\a"
-echo ""
-echo -e "${YELLOW}QR-код для подключения:${RESET}"
-qrencode -t ANSIUTF8 "${TG_LINK}"
+echo -e "${GREEN}${BOLD}Ссылка для подключения к прокси:${RESET}"
+echo -e "\e]8;;${TG_LINK}\a${CYAN}${TG_LINK}${RESET}\e]8;;\a"
 echo ""
 
 # ==========================================
 # ЧАСТЬ 4: НАСТРОЙКА FIREWALL
 # ==========================================
 echo -e "${BOLD}--- НАСТРОЙКА FIREWALL (UFW) ---${RESET}"
-echo -e "  - Открытие порта 22 (SSH)..."
 ufw allow 22/tcp >/dev/null 2>&1 || true
-echo -e "  - Открытие порта 443 (MTProto)..."
 ufw allow 443/tcp >/dev/null 2>&1
-echo -e "  - Открытие порта ${PANEL_PORT} (Панель)..."
 ufw allow ${PANEL_PORT}/tcp >/dev/null 2>&1
 
 if ufw status >/dev/null 2>&1; then
@@ -230,7 +228,6 @@ echo ""
 # ЧАСТЬ 5: УСТАНОВКА WEB UI ПАНЕЛИ
 # ==========================================
 echo -e "${BOLD}--- УСТАНОВКА WEB UI ПАНЕЛИ ---${RESET}"
-echo -e "  - Создание директорий панели..."
 
 PANEL_DIR="/var/www/telemt-panel"
 mkdir -p "$PANEL_DIR/templates"
@@ -255,16 +252,13 @@ with open('$PANEL_DIR/panel_config.json', 'w') as f: json.dump(config, f, indent
 " 2>/dev/null || true
 fi
 
-echo -e "  - Настройка Python окружения (venv)..."
 if [[ ! -d "$PANEL_DIR/venv" ]]; then
     python3 -m venv "$PANEL_DIR/venv"
 fi
 
 "$PANEL_DIR/venv/bin/pip" install -q --upgrade pip >/dev/null 2>&1
-echo -e "  - Установка Flask, Gunicorn, Werkzeug..."
 "$PANEL_DIR/venv/bin/pip" install -q Flask gunicorn toml werkzeug >/dev/null 2>&1
 
-echo -e "  - Сборка Backend архитектуры..."
 cat > "$PANEL_DIR/app.py" << 'PYEOF'
 import os, json, secrets, toml, subprocess
 from datetime import datetime, timedelta
@@ -308,17 +302,40 @@ def get_proxy_stats():
         return list(ips)
     except: return []
 
+def get_active_secrets():
+    # Эвристический поиск активных юзеров в логах за последние 10 минут
+    try:
+        result = subprocess.run(['journalctl', '-u', 'telemt', '--since', '10 minutes ago', '--no-pager'], capture_output=True, text=True)
+        logs = result.stdout
+        meta = load_json(USERS_META_PATH)
+        active_users = []
+        for name, data in meta.items():
+            if data['secret'] in logs:
+                active_users.append(name)
+        return active_users
+    except:
+        return []
+
+def get_server_uptime():
+    try:
+        with open('/proc/uptime', 'r') as f:
+            uptime_seconds = float(f.readline().split()[0])
+        d = int(uptime_seconds // 86400)
+        h = int((uptime_seconds % 86400) // 3600)
+        m = int((uptime_seconds % 3600) // 60)
+        return f"{d} дн. {h} ч. {m} мин."
+    except:
+        return "Неизвестно"
+
 def get_service_status():
     try:
         status = subprocess.run(['systemctl', 'is-active', 'telemt'], capture_output=True, text=True).stdout.strip()
+        srv_uptime = get_server_uptime()
         if status == 'active':
-            pid = subprocess.run(['systemctl', 'show', '-p', 'MainPID', 'telemt'], capture_output=True, text=True).stdout.strip().split('=')[1]
-            uptime = subprocess.run(['ps', '-o', 'etime=', '-p', pid], capture_output=True, text=True).stdout.strip()
-            # ps output might be e.g. "  05:48" or "1-02:30:15"
-            return "Работает", uptime.strip(), "success", True
-        return "Отключен", "-", "danger", False
+            return "Работает", srv_uptime, "success", True
+        return "Отключен", srv_uptime, "danger", False
     except:
-        return "Ошибка", "-", "danger", False
+        return "Ошибка", get_server_uptime(), "danger", False
 
 def process_timers(meta, toml_config):
     now = datetime.now()
@@ -327,8 +344,7 @@ def process_timers(meta, toml_config):
     toml_users = toml_config.get('access', {}).get('users', {})
 
     for name, data in list(meta.items()):
-        try:
-            created_at = datetime.fromisoformat(data['created_at'])
+        try: created_at = datetime.fromisoformat(data['created_at'])
         except:
             created_at = now
             data['created_at'] = now.isoformat()
@@ -342,20 +358,9 @@ def process_timers(meta, toml_config):
             d = diff.days
             h, rem = divmod(diff.seconds, 3600)
             m, _ = divmod(rem, 60)
-            
-            def plural(n, forms):
-                if n % 10 == 1 and n % 100 != 11: return forms[0]
-                if 2 <= n % 10 <= 4 and (n % 100 < 10 or n % 100 >= 20): return forms[1]
-                return forms[2]
-                
-            d_str = f"{d} {plural(d, ['день', 'дня', 'дней'])}"
-            h_str = f"{h} {plural(h, ['час', 'часа', 'часов'])}"
-            m_str = f"{m} {plural(m, ['минута', 'минуты', 'минут'])}"
-            data['time_str'] = f"Осталось: {d_str} {h_str} {m_str}"
+            data['time_str'] = f"{d}д {h}ч {m}м"
         else:
-            data['time_str'] = "Осталось: 0 дней 0 часов 0 минут"
-            
-            # Auto Pause Logic
+            data['time_str'] = "0д 0ч 0м"
             if data.get('status') == 'active':
                 data['status'] = 'disabled'
                 data['auto_paused'] = True
@@ -364,12 +369,10 @@ def process_timers(meta, toml_config):
                     toml_changed = True
                 meta_changed = True
                 
-            # Auto Delete Logic
             if data.get('auto_paused') and now >= delete_time:
                 del meta[name]
                 meta_changed = True
                 continue
-
     return meta_changed, toml_changed
 
 @app.before_request
@@ -402,7 +405,7 @@ def change_password():
         cfg['password_hash'] = generate_password_hash(request.form['new_password'])
         cfg['is_default'] = False
         save_json(CONFIG_PATH, cfg)
-        flash('Учетные данные обновлены!', 'success')
+        flash('Пароль обновлен! Добро пожаловать.', 'success')
         return redirect(url_for('dashboard'))
     return render_template('change_password.html')
 
@@ -422,7 +425,7 @@ def update_admin():
         
     save_json(CONFIG_PATH, cfg)
     session['user'] = cfg['username']
-    flash('Данные администратора успешно изменены!', 'success')
+    flash('Данные администратора изменены!', 'success')
     return redirect(url_for('dashboard'))
 
 @app.route('/', methods=['GET', 'POST'])
@@ -433,7 +436,6 @@ def dashboard():
         with open(TELEMT_TOML, 'r') as f: t_config = toml.load(f)
     except: t_config = {'access': {'users': {}}, 'censorship': {'tls_domain': 'max.ru'}}
 
-    # Sync missing users from TOML to Meta (e.g. admin_default)
     now_iso = datetime.now().isoformat()
     for name, secret in t_config.get('access', {}).get('users', {}).items():
         if name not in meta:
@@ -444,8 +446,7 @@ def dashboard():
     if toml_changed:
         with open(TELEMT_TOML, 'w') as f: toml.dump(t_config, f)
         execute_proxy_cmd('restart')
-    if meta_changed:
-        save_json(USERS_META_PATH, meta)
+    if meta_changed: save_json(USERS_META_PATH, meta)
 
     if request.method == 'POST':
         nickname = request.form.get('nickname', '').strip().replace(' ', '_')
@@ -459,8 +460,7 @@ def dashboard():
         user_key = f"{nickname}_{device}"
         new_secret = secrets.token_hex(16)
 
-        # Update global FakeTLS based on new user generation
-        t_config.setdefault('censorship', {})['tls_domain'] = faketls
+        # Важно: Не меняем глобальный SNI сервера, только записываем в TOML доступ и в Meta
         t_config.setdefault('access', {}).setdefault('users', {})[user_key] = new_secret
         with open(TELEMT_TOML, 'w') as f: toml.dump(t_config, f)
 
@@ -468,39 +468,42 @@ def dashboard():
         save_json(USERS_META_PATH, meta)
 
         execute_proxy_cmd('restart')
-        flash(f'Доступ для {user_key} создан! Сервер перенастроен на SNI: {faketls}', 'success')
+        flash(f'Доступ {user_key} создан (SNI: {faketls})', 'success')
         return redirect(url_for('dashboard'))
 
-    # Build Links
+    active_secrets_logs = get_active_secrets()
     proxy_links = {}
+    
     for name, m_data in meta.items():
         domain = m_data.get('faketls', t_config.get('censorship', {}).get('tls_domain', 'max.ru'))
         hex_domain = domain.encode('utf-8').hex()
         final_secret = f"ee{m_data['secret']}{hex_domain}"
         link = f"tg://proxy?server={cfg['proxy_host']}&port={cfg.get('proxy_port', 443)}&secret={final_secret}"
+        
+        # Определяем статус онлайн на основе парсинга логов
+        is_online = (name in active_secrets_logs) and m_data.get('status') == 'active'
+
         proxy_links[name] = {
             'link': link, 
             'status': m_data.get('status', 'active'),
-            'time_str': m_data.get('time_str', '')
+            'time_str': m_data.get('time_str', ''),
+            'is_online': is_online
         }
 
     stats = get_proxy_stats()
     srv_status, srv_uptime, srv_color, is_running = get_service_status()
-    total_users = len(meta)
-    online_users = len(stats)
     
     return render_template('dashboard.html', 
                            links=proxy_links, host=cfg['proxy_host'], 
                            stats=stats, current_user=cfg['username'],
                            srv_status=srv_status, srv_uptime=srv_uptime, srv_color=srv_color, is_running=is_running,
-                           total_users=total_users, online_users=online_users)
+                           total_users=len(meta), online_users=len(stats))
 
 @app.route('/system_action/<action>')
 def system_action(action):
     if action in ['restart', 'stop', 'start']:
         execute_proxy_cmd(action)
-        verb = "перезапущен" if action == 'restart' else ("остановлен" if action == 'stop' else "запущен")
-        flash(f'Прокси-сервер успешно {verb}', 'success')
+        flash('Команда выполнена', 'success')
     return redirect(url_for('dashboard'))
 
 @app.route('/toggle/<username>')
@@ -513,14 +516,11 @@ def toggle_user(username):
         if meta[username].get('status') == 'disabled':
             users_node[username] = meta[username]['secret']
             meta[username]['status'] = 'active'
-            if meta[username].get('auto_paused'):
-                meta[username]['created_at'] = datetime.now().isoformat()
-                meta[username]['auto_paused'] = False
-            flash(f'Доступ для {username} включен', 'success')
+            flash(f'Пользователь {username} активирован', 'success')
         else:
             if username in users_node: del users_node[username]
             meta[username]['status'] = 'disabled'
-            flash(f'Доступ для {username} приостановлен', 'warning')
+            flash(f'Доступ {username} приостановлен', 'warning')
             
         with open(TELEMT_TOML, 'w') as f: toml.dump(t_config, f)
         save_json(USERS_META_PATH, meta)
@@ -548,52 +548,76 @@ if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PANEL_PORT', 4444)))
 PYEOF
 
-echo -e "  - Рендер HTML шаблонов..."
 cat > "$PANEL_DIR/templates/layout.html" << 'HTMLEOF'
 <!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Панель управления MTProto Proxy</title>
+    <title>Darknet Proxy Panel</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <style>
-        body { background: #f4f6f9; min-height: 100vh; font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; display: flex; flex-direction: column; }
-        .navbar-brand { font-weight: 600; letter-spacing: 0.5px; }
-        .main-content { flex: 1; }
-        .card { border: none; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); margin-bottom: 1.5rem; }
-        .card-header { border-radius: 10px 10px 0 0 !important; font-weight: 600; padding: 1rem 1.25rem; border-bottom: none; }
-        .table { margin-bottom: 0; }
-        .table th { background-color: #f8f9fa; font-weight: 600; border-bottom: 2px solid #e9ecef; }
-        .badge-custom { font-size: 0.75rem; font-weight: 500; padding: 0.4em 0.6em; border-radius: 6px; }
-        .btn-action { width: 38px; height: 38px; padding: 0; line-height: 38px; text-align: center; border-radius: 8px; margin: 0 2px; transition: all 0.2s; }
-        .btn-action:hover { transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
-        .link-input { background-color: #f8f9fa; border: 1px solid #e9ecef; border-radius: 6px 0 0 6px; font-size: 0.85rem; color: #495057; }
-        .btn-copy { border-radius: 0 6px 6px 0; border: 1px solid #e9ecef; border-left: none; background: #fff; color: #6c757d; }
-        .btn-copy:hover { background: #e9ecef; }
-        footer { background: #fff; padding: 1rem 0; box-shadow: 0 -2px 10px rgba(0,0,0,0.02); margin-top: auto; color: #6c757d; font-size: 0.9rem; font-weight: 500; }
+        body { background-color: #050505; color: #00ff41; font-family: 'Courier New', Courier, monospace; min-height: 100vh; display: flex; flex-direction: column; }
+        .navbar { background-color: #0a0a0a !important; border-bottom: 1px solid #00ff41; box-shadow: 0 0 10px rgba(0,255,65,0.2); }
+        .navbar-brand { color: #00ff41 !important; font-weight: bold; text-transform: uppercase; letter-spacing: 2px; }
+        .card { background-color: #0a0a0a; border: 1px solid #003300; border-radius: 4px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); margin-bottom: 1.5rem; transition: border-color 0.3s; }
+        .card:hover { border-color: #00ff41; }
+        .card-header { background-color: #051505 !important; border-bottom: 1px solid #003300; font-weight: bold; text-transform: uppercase; color: #00ff41; border-radius: 4px 4px 0 0 !important; }
+        .form-control, .form-select { background-color: #000; border: 1px solid #005500; color: #00ff41; border-radius: 2px; }
+        .form-control:focus, .form-select:focus { background-color: #050505; border-color: #00ff41; color: #00ff41; box-shadow: 0 0 5px rgba(0,255,65,0.5); }
+        .form-label { color: #00aa22; }
+        .btn-success { background-color: #003300; border: 1px solid #00ff41; color: #00ff41; }
+        .btn-success:hover { background-color: #00ff41; color: #000; box-shadow: 0 0 10px #00ff41; }
+        .btn-primary { background-color: transparent; border: 1px solid #0088ff; color: #0088ff; }
+        .btn-primary:hover { background-color: #0088ff; color: #000; }
+        .btn-danger { background-color: transparent; border: 1px solid #ff003c; color: #ff003c; }
+        .btn-danger:hover { background-color: #ff003c; color: #000; }
+        .btn-warning { background-color: transparent; border: 1px solid #ffbb00; color: #ffbb00; }
+        .btn-warning:hover { background-color: #ffbb00; color: #000; }
+        .btn-outline-secondary { border-color: #004400; color: #00aa22; }
+        .btn-outline-secondary:hover { background-color: #004400; color: #00ff41; }
+        .table { color: #00aa22; margin-bottom: 0; }
+        .table th { background-color: #051505; border-bottom: 1px solid #00ff41; font-weight: normal; text-transform: uppercase; }
+        .table td { border-bottom: 1px solid #002200; vertical-align: middle; }
+        .table-hover tbody tr:hover { background-color: #001a00; color: #00ff41; }
+        .badge { border-radius: 2px; font-weight: normal; padding: 0.4em 0.6em; }
+        .btn-action { background: #000; border: 1px solid #005500; color: #00ff41; width: 32px; height: 32px; padding: 0; line-height: 30px; text-align: center; border-radius: 2px; margin: 0 2px; }
+        .btn-action:hover { background: #00ff41; color: #000; }
+        .btn-action.text-danger { color: #ff003c; border-color: #550000; }
+        .btn-action.text-danger:hover { background: #ff003c; color: #000; }
+        .link-input { border-radius: 2px 0 0 2px; font-size: 0.8rem; }
+        .btn-copy { border-radius: 0 2px 2px 0; border: 1px solid #005500; background: #002200; color: #00ff41; }
+        .btn-copy:hover { background: #00ff41; color: #000; }
+        .status-dot { height: 10px; width: 10px; border-radius: 50%; display: inline-block; box-shadow: 0 0 5px currentColor; }
+        .status-online { background-color: #00ff41; color: #00ff41; }
+        .status-offline { background-color: #ff003c; color: #ff003c; }
+        footer { border-top: 1px solid #003300; padding: 1rem 0; margin-top: auto; color: #005500; text-align: center; font-size: 0.8rem; }
+        .modal-content { background-color: #0a0a0a; border: 1px solid #00ff41; color: #00ff41; }
+        .modal-header { border-bottom: 1px solid #003300; }
+        .modal-footer { border-top: 1px solid #003300; }
+        .text-muted { color: #005500 !important; }
+        .alert { background-color: #001a00; border: 1px solid #00ff41; color: #00ff41; border-radius: 2px; }
+        .btn-close { filter: invert(1) grayscale(100%) brightness(200%); }
     </style>
 </head>
 <body>
-    <nav class="navbar navbar-expand-lg navbar-dark bg-dark shadow-sm mb-4">
-        <div class="container-fluid px-4">
-            <span class="navbar-brand"><i class="fas fa-server me-2 text-primary"></i>Панель управления MTProto Proxy</span>
-            {% if session.get('user') %}
-            <div class="d-flex align-items-center">
-                <span class="text-light me-3"><i class="fas fa-user-circle me-1"></i> {{ session.get('user') }}</span>
-                <a href="{{ url_for('logout') }}" class="btn btn-sm btn-outline-light"><i class="fas fa-sign-out-alt"></i> Выход</a>
-            </div>
-            {% endif %}
+    <nav class="navbar navbar-expand-lg px-4 mb-4">
+        <span class="navbar-brand"><i class="fas fa-terminal me-2"></i>[ PROXY_PANEL_v2.0 ]</span>
+        {% if session.get('user') %}
+        <div class="ms-auto d-flex align-items-center">
+            <span class="me-3 text-uppercase">USER: {{ session.get('user') }}</span>
+            <a href="{{ url_for('logout') }}" class="btn btn-sm btn-danger"><i class="fas fa-power-off"></i> EXIT</a>
         </div>
+        {% endif %}
     </nav>
 
-    <div class="container-fluid px-4 main-content">
+    <div class="container-fluid px-4 flex-grow-1">
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
                 {% for category, message in messages %}
-                    <div class="alert alert-{{ category }} alert-dismissible fade show shadow-sm rounded-3">
-                        <i class="fas fa-info-circle me-2"></i>{{ message }}
+                    <div class="alert alert-dismissible fade show shadow-sm">
+                        <i class="fas fa-angle-right me-2"></i>{{ message }}
                         <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
                     </div>
                 {% endfor %}
@@ -602,8 +626,8 @@ cat > "$PANEL_DIR/templates/layout.html" << 'HTMLEOF'
         {% block content %}{% endblock %}
     </div>
 
-    <footer class="text-center mt-5">
-        MTProto Proxy Panel 2026 by Mr_EFES
+    <footer>
+        [ MTProto Proxy Server :: Darknet Core :: 2026 ]
     </footer>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
@@ -616,22 +640,22 @@ cat > "$PANEL_DIR/templates/login.html" << 'HTMLEOF'
 {% extends "layout.html" %}
 {% block content %}
 <div class="row justify-content-center align-items-center mt-5">
-    <div class="col-md-5 col-lg-4">
-        <div class="card p-4 shadow">
+    <div class="col-md-4">
+        <div class="card p-4">
             <div class="text-center mb-4">
-                <i class="fas fa-shield-alt fa-3x text-primary mb-2"></i>
-                <h4 class="fw-bold text-dark">Авторизация</h4>
+                <i class="fas fa-user-secret fa-3x mb-3" style="color: #00ff41;"></i>
+                <h5 class="fw-bold">SYSTEM AUTHENTICATION</h5>
             </div>
             <form method="POST">
                 <div class="mb-3">
-                    <label class="form-label small text-muted">Логин</label>
-                    <input type="text" name="username" class="form-control form-control-lg" required autofocus>
+                    <label class="form-label small">LOGIN</label>
+                    <input type="text" name="username" class="form-control" required autofocus>
                 </div>
                 <div class="mb-4">
-                    <label class="form-label small text-muted">Пароль</label>
-                    <input type="password" name="password" class="form-control form-control-lg" required>
+                    <label class="form-label small">PASSWORD</label>
+                    <input type="password" name="password" class="form-control" required>
                 </div>
-                <button type="submit" class="btn btn-primary btn-lg w-100 fw-bold">Войти</button>
+                <button type="submit" class="btn btn-success w-100 fw-bold">> INITIATE CONNECTION</button>
             </form>
         </div>
     </div>
@@ -644,14 +668,14 @@ cat > "$PANEL_DIR/templates/change_password.html" << 'HTMLEOF'
 {% block content %}
 <div class="row justify-content-center mt-5">
     <div class="col-md-5">
-        <div class="card p-4 border-warning shadow">
-            <h4 class="text-center text-warning mb-4"><i class="fas fa-key"></i> Смена пароля по умолчанию</h4>
+        <div class="card p-4">
+            <h5 class="text-center text-warning mb-4"><i class="fas fa-exclamation-triangle"></i> SECURE DEFAULT PASSWORD</h5>
             <form method="POST">
                 <div class="mb-4">
-                    <label class="form-label small text-muted">Новый пароль</label>
-                    <input type="password" name="new_password" class="form-control form-control-lg" required minlength="6">
+                    <label class="form-label small">NEW PASSWORD</label>
+                    <input type="password" name="new_password" class="form-control" required minlength="6">
                 </div>
-                <button type="submit" class="btn btn-warning btn-lg w-100 fw-bold text-dark">Сохранить пароль</button>
+                <button type="submit" class="btn btn-warning w-100 fw-bold">> UPDATE SECURITY_KEY</button>
             </form>
         </div>
     </div>
@@ -667,66 +691,73 @@ cat > "$PANEL_DIR/templates/dashboard.html" << 'HTMLEOF'
     <div class="col-lg-4">
         <!-- Блок: Создать доступ -->
         <div class="card">
-            <div class="card-header bg-success text-white"><i class="fas fa-user-plus me-2"></i>Создать доступ</div>
+            <div class="card-header">>_ GENERATE_ACCESS</div>
             <div class="card-body">
                 <form method="POST">
                     <div class="mb-3">
-                        <label class="form-label small text-muted">Никнейм</label>
-                        <input type="text" name="nickname" class="form-control" placeholder="Например: Ivan" required>
+                        <label class="form-label small">USER_ALIAS</label>
+                        <input type="text" name="nickname" class="form-control" placeholder="E.g., Neo" required>
                     </div>
                     <div class="mb-3">
-                        <label class="form-label small text-muted">Устройство</label>
+                        <label class="form-label small">DEVICE_TYPE</label>
                         <select name="device" class="form-select">
-                            <option value="Phone">📱 Телефон</option><option value="PC">💻 ПК</option><option value="Tablet">📟 Планшет</option>
+                            <option value="Phone">Phone</option><option value="PC">Terminal</option><option value="Tablet">Pad</option>
                         </select>
                     </div>
                     <div class="mb-4">
-                        <label class="form-label small text-muted">Сайт для FakeTLS маскировки</label>
-                        <input type="text" name="faketls" class="form-control" placeholder="Например: ozon.ru">
+                        <label class="form-label small">SNI_SPOOF (FAKETLS)</label>
+                        <input type="text" name="faketls" id="faketls" class="form-control" placeholder="E.g., ozon.ru">
+                        <div class="mt-2 d-flex flex-wrap gap-1">
+                            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('faketls').value='ads.x5.ru'">ads.x5.ru</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('faketls').value='1c.ru'">1c.ru</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('faketls').value='ozon.ru'">ozon.ru</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('faketls').value='vk.com'">vk.com</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('faketls').value='max.ru'">max.ru</button>
+                        </div>
                     </div>
-                    <button type="submit" class="btn btn-success w-100 fw-bold"><i class="fas fa-magic me-2"></i>Сгенерировать</button>
+                    <button type="submit" class="btn btn-success w-100 fw-bold">> EXECUTE GENERATION</button>
                 </form>
             </div>
         </div>
 
         <!-- Блок: Настройки прокси -->
         <div class="card">
-            <div class="card-header bg-primary text-white"><i class="fas fa-cogs me-2"></i>Настройки прокси</div>
+            <div class="card-header">>_ SERVER_STATUS</div>
             <div class="card-body">
-                <div class="d-flex justify-content-between mb-3 pb-2 border-bottom">
-                    <span class="text-muted fw-bold">Статус сервера:</span>
-                    <span class="badge bg-{{ srv_color }} px-3 py-2" style="font-size:0.85rem;">{{ srv_status }}</span>
+                <div class="d-flex justify-content-between mb-2">
+                    <span>DAEMON_STATE:</span>
+                    <span class="text-{{ srv_color }} fw-bold">[{{ srv_status }}]</span>
                 </div>
-                <div class="d-flex justify-content-between mb-3 pb-2 border-bottom">
-                    <span class="text-muted fw-bold">Uptime сервера:</span>
-                    <span class="fw-bold text-dark">{{ srv_uptime }}</span>
+                <div class="d-flex justify-content-between mb-2">
+                    <span>OS_UPTIME:</span>
+                    <span class="fw-bold">{{ srv_uptime }}</span>
                 </div>
-                <div class="d-flex justify-content-between mb-3 pb-2 border-bottom">
-                    <span class="text-muted fw-bold">Всего Пользователей:</span>
-                    <span class="fw-bold text-primary fs-5">{{ total_users }}</span>
+                <div class="d-flex justify-content-between mb-2">
+                    <span>TOTAL_NODES:</span>
+                    <span class="fw-bold">{{ total_users }}</span>
                 </div>
-                <div class="d-flex justify-content-between mb-4 pb-2 border-bottom">
-                    <span class="text-muted fw-bold">Онлайн Пользователей:</span>
-                    <span class="fw-bold text-success fs-5">{{ online_users }}</span>
+                <div class="d-flex justify-content-between mb-4">
+                    <span>ACTIVE_FLOWS:</span>
+                    <span class="text-primary fw-bold">{{ online_users }}</span>
                 </div>
                 
                 <div class="d-grid gap-2">
-                    <a href="{{ url_for('system_action', action='restart') }}" class="btn btn-primary shadow-sm" onclick="return confirm('Перезагрузить все прокси?')">
-                        <i class="fas fa-sync-alt me-2"></i>Перезагрузить все прокси
+                    <a href="{{ url_for('system_action', action='restart') }}" class="btn btn-primary" onclick="return confirm('Restart daemon?')">
+                        > REBOOT_PROXY
                     </a>
                     
                     {% if is_running %}
-                    <a href="{{ url_for('system_action', action='stop') }}" class="btn btn-danger shadow-sm" onclick="return confirm('Вы уверены, что хотите полностью остановить прокси?')">
-                        <i class="fas fa-stop-circle me-2"></i>Остановить все прокси
+                    <a href="{{ url_for('system_action', action='stop') }}" class="btn btn-danger" onclick="return confirm('KILL proxy process?')">
+                        > KILL_PROCESS
                     </a>
                     {% else %}
-                    <a href="{{ url_for('system_action', action='start') }}" class="btn btn-success shadow-sm">
-                        <i class="fas fa-play-circle me-2"></i>Запустить прокси
+                    <a href="{{ url_for('system_action', action='start') }}" class="btn btn-success">
+                        > START_PROCESS
                     </a>
                     {% endif %}
                     
-                    <button class="btn btn-warning text-dark shadow-sm mt-2" data-bs-toggle="modal" data-bs-target="#adminModal">
-                        <i class="fas fa-user-shield me-2"></i>Изменить Пароль Администратора
+                    <button class="btn btn-warning mt-2" data-bs-toggle="modal" data-bs-target="#adminModal">
+                        > CHANGE_ROOT_CREDENTIALS
                     </button>
                 </div>
             </div>
@@ -736,50 +767,61 @@ cat > "$PANEL_DIR/templates/dashboard.html" << 'HTMLEOF'
     <!-- Правая колонка: Список -->
     <div class="col-lg-8">
         <div class="card h-100">
-            <div class="card-header bg-info text-white"><i class="fas fa-list-ul me-2"></i>Список доступов</div>
+            <div class="card-header">>_ CONNECTED_NODES</div>
             <div class="card-body p-0">
                 <div class="table-responsive">
-                    <table class="table table-hover align-middle">
+                    <table class="table align-middle">
                         <thead>
                             <tr>
-                                <th class="ps-4" style="width: 30%;">Пользователь</th>
-                                <th style="width: 45%;">Ссылка</th>
-                                <th class="text-end pe-4" style="width: 25%;">Действия</th>
+                                <th class="ps-3" style="width: 25%;">ALIAS</th>
+                                <th style="width: 15%;">STATUS</th>
+                                <th style="width: 40%;">PAYLOAD_LINK</th>
+                                <th class="text-end pe-3" style="width: 20%;">CMD</th>
                             </tr>
                         </thead>
                         <tbody>
                             {% for name, data in links.items() %}
-                            <tr class="{% if data.status == 'disabled' %}table-secondary opacity-75{% endif %}">
-                                <td class="ps-4">
-                                    <div class="fw-bold text-dark mb-1">
-                                        {{ name }}
-                                        {% if data.status == 'disabled' %}<span class="badge bg-danger ms-1" style="font-size:0.6rem;">Пауза</span>{% endif %}
-                                    </div>
-                                    <span class="badge-custom {% if '0 дней' in data.time_str %}bg-danger text-white{% elif 'disabled' in data.status %}bg-secondary text-white{% else %}bg-success text-white{% endif %} shadow-sm">
-                                        <i class="far fa-clock me-1"></i> {{ data.time_str }}
-                                    </span>
+                            <tr style="{% if data.status == 'disabled' %}opacity: 0.5;{% endif %}">
+                                <td class="ps-3">
+                                    <div class="fw-bold mb-1">{{ name }}</div>
+                                    <span class="small text-muted"><i class="far fa-clock"></i> {{ data.time_str }}</span>
+                                </td>
+                                <td>
+                                    {% if data.status == 'disabled' %}
+                                        <span class="badge" style="border: 1px solid #555; color: #555;">PAUSED</span>
+                                    {% else %}
+                                        {% if data.is_online %}
+                                            <div class="d-flex align-items-center">
+                                                <span class="status-dot status-online me-2"></span> <span style="color:#00ff41; font-size: 0.85rem;">В Сети</span>
+                                            </div>
+                                        {% else %}
+                                            <div class="d-flex align-items-center">
+                                                <span class="status-dot status-offline me-2"></span> <span style="color:#ff003c; font-size: 0.85rem;">Не в сети</span>
+                                            </div>
+                                        {% endif %}
+                                    {% endif %}
                                 </td>
                                 <td>
                                     <div class="input-group input-group-sm">
                                         <input type="text" class="form-control link-input" value="{{ data.link }}" readonly id="link-{{ loop.index }}">
                                         <button class="btn btn-copy" type="button" 
                                                 onclick="navigator.clipboard.writeText(document.getElementById('link-{{ loop.index }}').value);
-                                                         let i=this.querySelector('i'); i.className='fas fa-check text-success';
-                                                         setTimeout(()=>i.className='fas fa-copy',1500)" title="Скопировать">
+                                                         let i=this.querySelector('i'); i.className='fas fa-check';
+                                                         setTimeout(()=>i.className='fas fa-copy',1500)">
                                             <i class="fas fa-copy"></i>
                                         </button>
                                     </div>
                                 </td>
-                                <td class="text-end pe-4 text-nowrap">
-                                    <button class="btn btn-light btn-action text-primary border shadow-sm" onclick="showQR('{{ data.link }}')" title="Показать QR"><i class="fas fa-qrcode"></i></button>
-                                    <a href="{{ url_for('toggle_user', username=name) }}" class="btn btn-light btn-action border shadow-sm {% if data.status == 'active' %}text-warning{% else %}text-success{% endif %}" title="{% if data.status == 'active' %}Пауза{% else %}Включить{% endif %}">
+                                <td class="text-end pe-3 text-nowrap">
+                                    <button class="btn btn-action" onclick="showQR('{{ data.link }}')"><i class="fas fa-qrcode"></i></button>
+                                    <a href="{{ url_for('toggle_user', username=name) }}" class="btn btn-action {% if data.status == 'active' %}text-warning{% else %}text-success{% endif %}">
                                         <i class="fas {% if data.status == 'active' %}fa-pause{% else %}fa-play{% endif %}"></i>
                                     </a>
-                                    <a href="{{ url_for('delete_user', username=name) }}" class="btn btn-light btn-action text-danger border shadow-sm" onclick="return confirm('Вы уверены, что хотите удалить доступ для {{ name }}?')" title="Удалить"><i class="fas fa-trash-alt"></i></a>
+                                    <a href="{{ url_for('delete_user', username=name) }}" class="btn btn-action text-danger" onclick="return confirm('Purge {{ name }}?')" ><i class="fas fa-trash-alt"></i></a>
                                 </td>
                             </tr>
                             {% else %}
-                            <tr><td colspan="3" class="text-center py-5 text-muted"><i class="fas fa-inbox fa-3x mb-3 text-light"></i><br>Нет созданных доступов</td></tr>
+                            <tr><td colspan="4" class="text-center py-5 text-muted">> NO_NODES_FOUND</td></tr>
                             {% endfor %}
                         </tbody>
                     </table>
@@ -792,13 +834,13 @@ cat > "$PANEL_DIR/templates/dashboard.html" << 'HTMLEOF'
 <!-- Модальное окно QR-кода -->
 <div class="modal fade" id="qrModal" tabindex="-1">
   <div class="modal-dialog modal-dialog-centered modal-sm">
-    <div class="modal-content border-0 shadow-lg rounded-4">
+    <div class="modal-content">
       <div class="modal-header border-0 pb-0">
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body text-center pb-4 pt-1">
-        <h5 class="fw-bold mb-3 text-dark">Сканируйте для подключения</h5>
-        <div id="qrcode" class="d-flex justify-content-center p-3 bg-white rounded-3 shadow-sm border"></div>
+        <h6 class="fw-bold mb-3">> SCAN_TO_CONNECT</h6>
+        <div id="qrcode" class="d-flex justify-content-center p-3 rounded-2" style="background: #fff;"></div>
       </div>
     </div>
   </div>
@@ -807,30 +849,30 @@ cat > "$PANEL_DIR/templates/dashboard.html" << 'HTMLEOF'
 <!-- Модальное окно Смены Администратора -->
 <div class="modal fade" id="adminModal" tabindex="-1">
   <div class="modal-dialog modal-dialog-centered">
-    <div class="modal-content border-0 shadow-lg">
-      <div class="modal-header bg-warning text-dark border-0">
-        <h5 class="modal-title fw-bold"><i class="fas fa-user-shield me-2"></i>Настройки администратора</h5>
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title fw-bold">> UPDATE_CREDENTIALS</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <form action="{{ url_for('update_admin') }}" method="POST">
           <div class="modal-body p-4">
               <div class="mb-3">
-                  <label class="form-label small fw-bold">Текущий пароль (обязательно)</label>
+                  <label class="form-label small">CURRENT_PASSWORD (REQ)</label>
                   <input type="password" name="old_password" class="form-control" required>
               </div>
-              <hr class="text-muted">
+              <hr style="border-color: #003300;">
               <div class="mb-3">
-                  <label class="form-label small fw-bold">Новый Логин</label>
+                  <label class="form-label small">NEW_LOGIN</label>
                   <input type="text" name="new_username" class="form-control" value="{{ current_user }}" required>
               </div>
               <div class="mb-3">
-                  <label class="form-label small fw-bold">Новый Пароль (Оставьте пустым, если не меняете)</label>
+                  <label class="form-label small">NEW_PASSWORD (LEAVE BLANK TO KEEP)</label>
                   <input type="password" name="new_password" class="form-control" minlength="6">
               </div>
           </div>
-          <div class="modal-footer border-0 pt-0">
-              <button type="button" class="btn btn-light" data-bs-dismiss="modal">Отмена</button>
-              <button type="submit" class="btn btn-warning fw-bold">Сохранить изменения</button>
+          <div class="modal-footer">
+              <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">ABORT</button>
+              <button type="submit" class="btn btn-warning fw-bold">> APPLY</button>
           </div>
       </form>
     </div>
@@ -840,7 +882,7 @@ cat > "$PANEL_DIR/templates/dashboard.html" << 'HTMLEOF'
 <script>
 function showQR(link) {
     document.getElementById('qrcode').innerHTML = '';
-    new QRCode(document.getElementById('qrcode'), {text: link, width: 220, height: 220, colorDark : "#1a1a1a", colorLight : "#ffffff", correctLevel : QRCode.CorrectLevel.M});
+    new QRCode(document.getElementById('qrcode'), {text: link, width: 220, height: 220, colorDark : "#000000", colorLight : "#ffffff", correctLevel : QRCode.CorrectLevel.M});
     new bootstrap.Modal(document.getElementById('qrModal')).show();
 }
 </script>
@@ -848,11 +890,10 @@ function showQR(link) {
 HTMLEOF
 
 echo -e "  - Обновление Backend панели завершено."
-echo -e "  - Настройка службы панели..."
 
 cat > /etc/systemd/system/telemt-panel.service << EOF
 [Unit]
-Description=MTProto Proxy Web Panel (Gunicorn)
+Description=MTProto Proxy Web Panel
 After=network.target
 
 [Service]
@@ -910,7 +951,7 @@ chmod +x /usr/local/bin/telemt-updater.sh
 # ==========================================
 echo -e "${CYAN}${BOLD}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "           🎉 УСТАНОВКА ЗАВЕРШЕНА УСПЕШНО! 🎉"
+echo "           SYSTEM DEPLOYMENT SUCCESSFUL!"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo -e "${RESET}"
 echo -e "${BOLD}🖥️ ПАНЕЛЬ УПРАВЛЕНИЯ:${RESET}"
