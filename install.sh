@@ -29,7 +29,7 @@ print_success() { echo -e "${GREEN}[+] $1${RESET}"; }
 print_error() { echo -e "${RED}[x] $1${RESET}"; exit 1; }
 
 # ==========================================
-# ЧАСТЬ 1: СБОР ДАННЫХ И ИСПРАВЛЕННЫЙ FAKE TLS
+# ЧАСТЬ 1: СБОР ДАННЫХ
 # ==========================================
 show_banner
 
@@ -75,29 +75,48 @@ print_success "Принят SNI для Fake TLS: $FAKE_DOMAIN"
 # ЧАСТЬ 2: ПОДГОТОВКА СИСТЕМЫ И SSL
 # ==========================================
 print_step "УСТАНОВКА ЗАВИСИМОСТЕЙ (0/100%)"
-apt-get update -qq >/dev/null 2>&1
-apt-get install -y -qq curl wget jq openssl certbot xxd socat ufw python3 python3-pip python3-venv iproute2 net-tools qrencode >/dev/null 2>&1
+apt-get update -qq >/dev/null 2>&1 || true
+if ! apt-get install -y -qq curl wget jq openssl certbot xxd socat ufw python3 python3-pip python3-venv iproute2 net-tools qrencode >/dev/null 2>&1; then
+    print_error "Ошибка установки пакетов. Проверьте подключение к интернету."
+fi
 systemctl stop nginx apache2 2>/dev/null || true
 print_success "Системные зависимости установлены"
 
 issue_ssl() {
     local domain=$1
     local email=$2
+    local certbot_out
+    
+    # Обязательно открываем порт 80 для Let's Encrypt
+    ufw allow 80/tcp >/dev/null 2>&1 || true
+
+    echo "Выпуск SSL для ${domain}..."
     if [[ -n "$email" ]]; then
-        certbot certonly --standalone -d "${domain}" --email "${email}" --agree-tos --non-interactive --quiet >/dev/null 2>&1
+        certbot_out=$(certbot certonly --standalone -d "${domain}" --email "${email}" --agree-tos --non-interactive 2>&1) || true
     else
-        certbot certonly --standalone -d "${domain}" --register-unsafely-without-email --agree-tos --non-interactive --quiet >/dev/null 2>&1
+        certbot_out=$(certbot certonly --standalone -d "${domain}" --register-unsafely-without-email --agree-tos --non-interactive 2>&1) || true
+    fi
+    
+    if [[ ! -f "/etc/letsencrypt/live/${domain}/fullchain.pem" ]]; then
+        echo -e "\n${RED}======================================================${RESET}"
+        echo -e "${RED}[x] ОШИБКА ВЫПУСКА SSL ДЛЯ ДОМЕНА: ${domain}${RESET}"
+        echo -e "${RED}======================================================${RESET}"
+        echo -e "${YELLOW}Лог ошибки от Certbot:${RESET}"
+        echo "$certbot_out"
+        echo -e "${RED}======================================================${RESET}"
+        echo -e "${CYAN}💡 ЧТО НУЖНО ПРОВЕРИТЬ:${RESET}"
+        echo -e "1. Направлена ли A-запись домена ${domain} на IP этого сервера?"
+        echo -e "2. Если домен на Cloudflare, отключите проксирование (сделайте облачко серым - DNS Only)."
+        echo -e "3. Открыт ли порт 80 у вашего хостинг-провайдера (в панели управления сервером)?"
+        exit 1
+    else
+        print_success "SSL сертификат для ${domain} успешно выпущен"
     fi
 }
 
 print_step "ВЫПУСК SSL СЕРТИФИКАТОВ"
-echo "Выпуск SSL для $PROXY_DOMAIN..."
 issue_ssl "$PROXY_DOMAIN" "$CERT_EMAIL"
-[[ -f "/etc/letsencrypt/live/${PROXY_DOMAIN}/fullchain.pem" ]] && print_success "SSL $PROXY_DOMAIN готов" || print_error "Ошибка SSL $PROXY_DOMAIN"
-
-echo "Выпуск SSL для $PANEL_DOMAIN..."
 issue_ssl "$PANEL_DOMAIN" "$CERT_EMAIL"
-[[ -f "/etc/letsencrypt/live/${PANEL_DOMAIN}/fullchain.pem" ]] && print_success "SSL $PANEL_DOMAIN готов" || print_error "Ошибка SSL $PANEL_DOMAIN"
 
 # ==========================================
 # ЧАСТЬ 3: ЯДРО TELEMT PROXY
@@ -105,7 +124,9 @@ issue_ssl "$PANEL_DOMAIN" "$CERT_EMAIL"
 print_step "УСТАНОВКА MTPROTO ЯДРА"
 ARCH=$(uname -m)
 [[ "$ARCH" == "x86_64" ]] && BIN_ARCH="x86_64" || BIN_ARCH="aarch64"
-wget -q "https://github.com/telemt/telemt/releases/latest/download/telemt-${BIN_ARCH}-linux-gnu.tar.gz" -O /tmp/telemt.tar.gz
+if ! wget -q "https://github.com/telemt/telemt/releases/latest/download/telemt-${BIN_ARCH}-linux-gnu.tar.gz" -O /tmp/telemt.tar.gz; then
+    print_error "Не удалось скачать ядро Telemt"
+fi
 tar -xzf /tmp/telemt.tar.gz -C /tmp
 mv /tmp/telemt /usr/local/bin/telemt
 chmod +x /usr/local/bin/telemt
@@ -134,7 +155,6 @@ print_step "НАСТРОЙКА WEB-ПАНЕЛИ УПРАВЛЕНИЯ"
 PANEL_DIR="/var/www/telemt-panel"
 mkdir -p "$PANEL_DIR/templates"
 
-# Создаем виртуальное окружение
 python3 -m venv "$PANEL_DIR/venv"
 "$PANEL_DIR/venv/bin/pip" install -q Flask gunicorn toml werkzeug qrcode[pil] >/dev/null 2>&1
 
@@ -266,7 +286,7 @@ def dashboard():
         users[uid] = {
             "secret": secrets.token_hex(16),
             "status": "active",
-            "timer_seconds": 2592000, # 30 days
+            "timer_seconds": 2592000, 
             "last_tick": int(time.time()),
             "created_at": int(time.time())
         }
@@ -275,7 +295,6 @@ def dashboard():
         flash(f'Доступ {uid} создан!', 'success')
         return redirect(url_for('dashboard'))
 
-    # Format data for UI
     hex_domain = cfg.get("fake_tls", "ads.x5.ru").encode('utf-8').hex()
     online_uids = check_online_status()
     
@@ -302,7 +321,7 @@ def user_action(action, uid):
         users[uid]['paused_at'] = int(time.time())
     elif action == 'resume':
         users[uid]['status'] = 'active'
-        users[uid]['timer_seconds'] = 2592000 # Reset to 30 days
+        users[uid]['timer_seconds'] = 2592000 
         users[uid]['last_tick'] = int(time.time())
     elif action == 'delete':
         del users[uid]
@@ -379,7 +398,6 @@ if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PANEL_PORT', 4444)))
 PYEOF
 
-# Инициализация первого пользователя CLI -> БД
 FIRST_SECRET=$(openssl rand -hex 16)
 cat > "$PANEL_DIR/users_db.json" << EOF
 {
@@ -393,7 +411,6 @@ cat > "$PANEL_DIR/users_db.json" << EOF
 }
 EOF
 
-# HTML Шаблоны (Telegram Dark Mode Style)
 cat > "$PANEL_DIR/templates/layout.html" << 'HTMLEOF'
 <!DOCTYPE html>
 <html lang="ru" data-bs-theme="dark">
@@ -553,7 +570,6 @@ cat > "$PANEL_DIR/templates/dashboard.html" << 'HTMLEOF'
                         </td>
                     </tr>
                     
-                    <!-- Modal QR -->
                     <div class="modal fade" id="qrModal{{ loop.index }}" tabindex="-1">
                         <div class="modal-dialog modal-sm modal-dialog-centered">
                             <div class="modal-content" style="background-color: #17212b;">
@@ -654,7 +670,6 @@ cat > "$PANEL_DIR/templates/login.html" << 'HTMLEOF'
 {% endblock %}
 HTMLEOF
 
-# Первичная генерация toml
 "$PANEL_DIR/venv/bin/python" -c "from app import rebuild_telemt; rebuild_telemt()"
 systemctl enable telemt --now >/dev/null 2>&1
 print_success "Файлы панели успешно развернуты"
@@ -679,12 +694,13 @@ systemctl enable telemt-panel --now >/dev/null 2>&1
 print_success "Службы запущены"
 
 # ==========================================
-# ЧАСТЬ 5: UFW & CRON (ТАЙМЕР И АВТООБНОВЛЕНИЕ)
+# ЧАСТЬ 5: UFW & CRON
 # ==========================================
 print_step "НАСТРОЙКА FIREWALL И ФОНОВЫХ ЗАДАЧ"
 ufw allow 22/tcp >/dev/null 2>&1 || true
-ufw allow 443/tcp >/dev/null 2>&1
-ufw allow ${PANEL_PORT}/tcp >/dev/null 2>&1
+ufw allow 80/tcp >/dev/null 2>&1 || true
+ufw allow 443/tcp >/dev/null 2>&1 || true
+ufw allow ${PANEL_PORT}/tcp >/dev/null 2>&1 || true
 if ufw status | grep -q "Status: active"; then ufw --force reload >/dev/null 2>&1; fi
 
 (crontab -l 2>/dev/null | grep -v "telemt-panel" | grep -v "certbot renew") | crontab - 2>/dev/null || true
