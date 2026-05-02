@@ -1,821 +1,1671 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -Eeuo pipefail
 
-# MTProto Proxy Panel 2026 by Mr_EFES
-# Full Featured Installer with Modern Web Panel
-
-set -e
-
-# Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
 CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+MAGENTA='\033[0;35m'
+BOLD='\033[1m'
+RESET='\033[0m'
 
-# Variables
-PANEL_DIR="/opt/mtproto-panel"
-LOG_FILE="$PANEL_DIR/install.log"
-CONFIG_FILE="$PANEL_DIR/config.json"
-USERS_FILE="$PANEL_DIR/users.json"
-SECRET_KEY=$(openssl rand -hex 32)
-ADMIN_USER="admin"
-ADMIN_PASS=$(openssl rand -base64 12)
-DEFAULT_PORT=4444
-PROXY_PORT=443
+TOTAL_STEPS=11
+STEP_NOW=0
 
-# Ensure directory exists before logging
-mkdir -p "$PANEL_DIR"
-touch "$LOG_FILE"
+log() { printf "%b\n" "$*"; }
 
-log() {
-    local msg="[$(date +'%H:%M:%S')] $1"
-    echo -e "$msg" | tee -a "$LOG_FILE"
+progress() {
+  local pct=$(( STEP_NOW * 100 / TOTAL_STEPS ))
+  local filled=$(( pct / 5 ))
+  local empty=$(( 20 - filled ))
+  local bar
+  bar=$(printf "%${filled}s" "" | tr ' ' '█')
+  bar+=$(printf "%${empty}s" "" | tr ' ' '░')
+  printf "\r${CYAN}%s${RESET} [%s] %3d%%" "$1" "$bar" "$pct"
 }
 
-error_log() {
-    local msg="[$(date +'%H:%M:%S')] ERROR: $1"
-    echo -e "${RED}$msg${NC}" | tee -a "$LOG_FILE"
-    exit 1
+step_done() {
+  STEP_NOW=$((STEP_NOW+1))
+  progress "$1"
+  printf "\n"
 }
 
-# Banner
-show_banner() {
-    clear
-    echo -e "${CYAN}"
-    cat << "EOF"
-  __  __ _     _     _ _        _    
- |  \/  (_) __| |___| (_)______| | ___ 
- | |\/| | |/ _` / __| | |_  / _ \ |/ _ \
- | |  | | | (_| \__ \ | |/ /  __/ | (_) |
- |_|  |_|_|\__,_|___/_|_/___\___|_|\___/ 
-EOF
-    echo -e "${GREEN}          Modern MTProto Panel 2026 by Mr_EFES${NC}"
-    echo ""
+trap 'printf "\n%b\n" "${RED}${BOLD}Установка завершилась НЕУСПЕШНО на строке ${LINENO}.${RESET}" >&2' ERR
+
+print_banner() {
+  printf "%b\n" "${CYAN}${BOLD}"
+  printf "  ███╗   ███╗████████╗██████╗ ██████╗  ██████╗ ████████╗ ██████╗ \n"
+  printf "  ████╗ ████║╚══██╔══╝██╔══██╗██╔══██╗██╔═══██╗╚══██╔══╝██╔═══██╗\n"
+  printf "  ██╔████╔██║   ██║   ██████╔╝██████╔╝██║   ██║   ██║   ██║   ██║\n"
+  printf "  ██║╚██╔╝██║   ██║   ██╔═══╝ ██╔══██╗██║   ██║   ██║   ██║   ██║\n"
+  printf "  ██║ ╚═╝ ██║   ██║   ██║     ██║  ██║╚██████╔╝   ██║   ╚██████╔╝\n"
+  printf "  ╚═╝     ╚═╝   ╚═╝   ╚═╝     ╚═╝  ╚═╝ ╚═════╝    ╚═╝   ╚═════╝  \n"
+  printf "%b\n" "${RESET}${MAGENTA}          MTProto Proxy Panel Installer by Mr_EFES${RESET}"
+  printf "\n"
 }
 
-# Progress Bar Function
-progress_bar() {
-    local duration=$1
-    local steps=50
-    local interval=$(echo "scale=2; $duration / $steps" | bc)
-    
-    echo -ne "${BLUE}["
-    for ((i=0; i<=steps; i++)); do
-        echo -ne "#"
-        sleep $interval
-    done
-    echo -ne "] 100%${NC}\n"
+issue_ssl() {
+  local domain="$1"
+  local email="$2"
+  local cert_path="/etc/letsencrypt/live/${domain}/fullchain.pem"
+  if [[ -f "$cert_path" ]]; then
+    if openssl x509 -in "$cert_path" -noout -checkend 86400 >/dev/null 2>&1; then
+      echo "exist"
+      return 0
+    fi
+  fi
+
+  if [[ -n "$email" ]]; then
+    certbot certonly --standalone -d "$domain" --email "$email" --agree-tos --non-interactive >/dev/null 2>&1
+  else
+    certbot certonly --standalone -d "$domain" --register-unsafely-without-email --agree-tos --non-interactive >/dev/null 2>&1
+  fi
+
+  if [[ -f "$cert_path" ]]; then
+    [[ -f "$cert_path" ]] && echo "new" || echo "error"
+  else
+    echo "error"
+  fi
 }
 
-# Check Root
-if [[ $EUID -ne 0 ]]; then
-   error_log "Этот скрипт должен запускаться от имени root!"
+validate_domain() {
+  local value="$1"
+  [[ "$value" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ ]]
+}
+
+validate_port() {
+  local value="$1"
+  [[ "$value" =~ ^[0-9]+$ ]] && (( value >= 1 && value <= 65535 ))
+}
+
+print_banner
+
+if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
+  log "${RED}Ошибка: запустите скрипт от имени root.${RESET}"
+  exit 1
 fi
 
-show_banner
+log "${YELLOW}Проверяю окружение и ставлю зависимости...${RESET}"
+apt-get update -y
+apt-get install -y curl wget jq openssl certbot xxd socat ufw python3 python3-pip python3-venv iproute2 net-tools qrencode sqlite3
+step_done "Пакеты установлены"
 
-log "${YELLOW}Шаг 1: Сбор информации для установки...${NC}"
+read -rp "1. Укажите Домен ПРОКСИ (напр. tg.example.com): " PROXY_DOMAIN
+validate_domain "${PROXY_DOMAIN:-}" || { log "${RED}Домен прокси обязателен и должен быть корректным FQDN.${RESET}"; exit 1; }
 
-# Inputs
-read -p "1. Укажите Домен ПРОКСИ (напр. tg.example.com): " PROXY_DOMAIN
-if [ -z "$PROXY_DOMAIN" ]; then error_log "Домен прокси обязателен!"; fi
+read -rp "2. Укажите Домен ПАНЕЛИ (напр. admin.example.com): " PANEL_DOMAIN
+validate_domain "${PANEL_DOMAIN:-}" || { log "${RED}Домен панели обязателен и должен быть корректным FQDN.${RESET}"; exit 1; }
 
-read -p "2. Укажите Домен ПАНЕЛИ (напр. admin.example.com): " PANEL_DOMAIN
-if [ -z "$PANEL_DOMAIN" ]; then error_log "Домен панели обязателен!"; fi
+read -rp "3. Укажите порт ПАНЕЛИ [по умолчанию будет 4444]: " PANEL_PORT_INPUT
+PANEL_PORT="${PANEL_PORT_INPUT:-4444}"
+validate_port "${PANEL_PORT}" || { log "${RED}Порт панели должен быть числом от 1 до 65535.${RESET}"; exit 1; }
 
-read -p "3. Укажите порт ПАНЕЛИ [по умолчанию 4444]: " PANEL_PORT
-PANEL_PORT=${PANEL_PORT:-$DEFAULT_PORT}
+read -rp "Введите Email для Let's Encrypt (необязательно): " CERT_EMAIL
 
-log "Домен прокси: $PROXY_DOMAIN"
-log "Домен панели: $PANEL_DOMAIN"
-log "Порт панели: $PANEL_PORT"
+log ""
+log "${BOLD}Выберите домен для Fake TLS маскировки:${RESET}"
+log "1) ads.x5.ru"
+log "2) 1c.ru"
+log "3) ozon.ru"
+log "4) vk.com"
+log "5) max.ru"
+log "6) Свой Вариант"
+read -rp "Ваш выбор [1-6, Enter = 1, или сразу домен]: " FAKE_CHOICE
+case "${FAKE_CHOICE:-1}" in
+  1) FAKE_DOMAIN="ads.x5.ru" ;;
+  2) FAKE_DOMAIN="1c.ru" ;;
+  3) FAKE_DOMAIN="ozon.ru" ;;
+  4) FAKE_DOMAIN="vk.com" ;;
+  5) FAKE_DOMAIN="max.ru" ;;
+  6)
+    read -rp "Введите свой домен для Fake TLS маскировки: " FAKE_DOMAIN
+    [[ -n "${FAKE_DOMAIN:-}" ]] || { log "${RED}Свой домен не может быть пустым.${RESET}"; exit 1; }
+    ;;
+  *)
+    FAKE_DOMAIN="${FAKE_CHOICE}"
+    ;;
+esac
+validate_domain "${FAKE_DOMAIN:-}" || { log "${RED}Домен FakeTLS/SNI должен быть корректным FQDN.${RESET}"; exit 1; }
 
-log "${YELLOW}Шаг 2: Обновление системы и установка зависимостей...${NC}"
-apt-get update > /dev/null 2>&1
-apt-get install -y curl wget git python3 python3-pip nginx certbot python3-certbot-nginx openssl jq bc > /dev/null 2>&1
-progress_bar 2
+INITIAL_USERNAME="default_phone"
+INITIAL_SECRET="$(openssl rand -hex 16)"
 
-log "${YELLOW}Шаг 3: Установка Docker и MTProto сервера...${NC}"
-curl -fsSL https://get.docker.com -o get-docker.sh
-sh get-docker.sh > /dev/null 2>&1
-progress_bar 3
+log "${CYAN}Параметры:${RESET}"
+log "  Прокси: ${PROXY_DOMAIN}:443"
+log "  Панель: https://${PANEL_DOMAIN}:${PANEL_PORT}"
+log "  FakeTLS SNI: ${FAKE_DOMAIN}"
+if [[ -n "${CERT_EMAIL}" ]]; then
+  log "  Email SSL: ${CERT_EMAIL}"
+else
+  log "  Email SSL: не указан"
+fi
+log ""
 
-log "${YELLOW}Шаг 4: Генерация конфигурации и ключей...${NC}"
+log "${YELLOW}Выпускаю/обновляю SSL для прокси...${RESET}"
+case "$(issue_ssl "$PROXY_DOMAIN" "$CERT_EMAIL")" in
+  exist) log "${GREEN}SSL для прокси уже действителен.${RESET}" ;;
+  new) log "${GREEN}SSL для прокси выпущен.${RESET}" ;;
+  error) log "${RED}Не удалось получить SSL для прокси.${RESET}"; exit 1 ;;
+esac
 
-# Generate Secret
-SECRET=$(head -c 16 /dev/urandom | xxd -ps)
-# Fallback if xxd not found
-if [ -z "$SECRET" ]; then SECRET=$(openssl rand -hex 16); fi
+log "${YELLOW}Выпускаю/обновляю SSL для панели...${RESET}"
+case "$(issue_ssl "$PANEL_DOMAIN" "$CERT_EMAIL")" in
+  exist) log "${GREEN}SSL для панели уже действителен.${RESET}" ;;
+  new) log "${GREEN}SSL для панели выпущен.${RESET}" ;;
+  error) log "${RED}Не удалось получить SSL для панели.${RESET}"; exit 1 ;;
+esac
+step_done "SSL готов"
 
-mkdir -p "$PANEL_DIR/data"
+systemctl stop nginx apache2 2>/dev/null || true
 
-# Save Config
-cat > "$CONFIG_FILE" <<EOF
-{
-    "proxy_domain": "$PROXY_DOMAIN",
-    "panel_domain": "$PANEL_DOMAIN",
-    "panel_port": "$PANEL_PORT",
-    "secret": "$SECRET",
-    "admin_user": "$ADMIN_USER",
-    "admin_pass": "$ADMIN_PASS",
-    "sni_default": "vk.com"
-}
+ARCH="$(uname -m)"
+case "$ARCH" in
+  x86_64) BIN_ARCH="x86_64" ;;
+  aarch64|arm64) BIN_ARCH="aarch64" ;;
+  *) log "${RED}Неподдерживаемая архитектура: $ARCH${RESET}"; exit 1 ;;
+esac
+
+log "${YELLOW}Скачиваю telemt...${RESET}"
+TMP_DIR="$(mktemp -d)"
+wget -q "https://github.com/telemt/telemt/releases/latest/download/telemt-${BIN_ARCH}-linux-gnu.tar.gz" -O "${TMP_DIR}/telemt.tar.gz"
+tar -xzf "${TMP_DIR}/telemt.tar.gz" -C "${TMP_DIR}"
+install -m 755 "${TMP_DIR}/telemt" /usr/local/bin/telemt
+rm -rf "${TMP_DIR}"
+step_done "telemt установлен"
+
+API_TOKEN="$(openssl rand -hex 24)"
+PANEL_ADMIN_USER="admin"
+PANEL_ADMIN_PASS="$(openssl rand -base64 18 | tr -dc 'A-Za-z0-9' | head -c 16)"
+PANEL_SECRET_KEY="$(openssl rand -hex 32)"
+
+mkdir -p /etc/telemt /var/lib/telemt-panel /var/www/telemt-panel/templates
+
+cat > /etc/telemt/telemt.toml <<EOF
+[general]
+use_middle_proxy = true
+log_level = "normal"
+
+[general.modes]
+classic = false
+secure = false
+tls = true
+
+[general.links]
+show = "*"
+public_host = "${PROXY_DOMAIN}"
+public_port = 443
+
+[server]
+port = 443
+
+[server.api]
+enabled = true
+listen = "127.0.0.1:9091"
+whitelist = ["127.0.0.1/32", "::1/128"]
+auth_header = "${API_TOKEN}"
+minimal_runtime_enabled = false
+minimal_runtime_cache_ttl_ms = 1000
+runtime_edge_enabled = true
+runtime_edge_cache_ttl_ms = 1000
+
+[[server.listeners]]
+ip = "0.0.0.0"
+
+[censorship]
+tls_domain = "${FAKE_DOMAIN}"
+mask = true
+tls_emulation = true
+tls_front_dir = "tlsfront"
+
+[access.users]
+${INITIAL_USERNAME} = "${INITIAL_SECRET}"
 EOF
 
-# Initialize Users DB
-cat > "$USERS_FILE" <<EOF
-[]
-EOF
-
-log "${YELLOW}Шаг 5: Настройка Nginx и SSL сертификатов...${NC}"
-
-# Nginx Config for Panel
-cat > /etc/nginx/sites-available/mtproto-panel <<EOF
-server {
-    listen 80;
-    server_name $PANEL_DOMAIN;
-    
-    location /.well-known/acme-challenge/ {
-        root /var/www/certbot;
-    }
-    
-    location / {
-        return 301 https://\$server_name\$request_uri;
-    }
-}
-
-server {
-    listen 443 ssl http2;
-    server_name $PANEL_DOMAIN;
-
-    ssl_certificate /etc/letsencrypt/live/$PANEL_DOMAIN/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/$PANEL_DOMAIN/privkey.pem;
-    
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers HIGH:!aNULL:!MD5;
-
-    location / {
-        proxy_pass http://127.0.0.1:8080;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host \$host;
-        proxy_cache_bypass \$http_upgrade;
-    }
-    
-    location /api {
-        proxy_pass http://127.0.0.1:8080;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-    }
-}
-EOF
-
-ln -sf /etc/nginx/sites-available/mtproto-panel /etc/nginx/sites-enabled/
-mkdir -p /var/www/certbot
-certbot certonly --webroot -w /var/www/certbot -d $PANEL_DOMAIN --non-interactive --agree-tos --email admin@$PANEL_DOMAIN > /dev/null 2>&1 || {
-    log "${YELLOW}Автоматическая выдача сертификата не удалась. Проверьте DNS записи для $PANEL_DOMAIN"
-    # Создаем самоподписанный сертификат для теста, чтобы панель запустилась
-    mkdir -p /etc/letsencrypt/live/$PANEL_DOMAIN
-    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-        -keyout /etc/letsencrypt/live/$PANEL_DOMAIN/privkey.pem \
-        -out /etc/letsencrypt/live/$PANEL_DOMAIN/fullchain.pem \
-        -subj "/CN=$PANEL_DOMAIN" 2>/dev/null
-}
-
-nginx -t > /dev/null 2>&1 && systemctl restart nginx
-progress_bar 2
-
-log "${YELLOW}Шаг 6: Запуск контейнера MTProto...${NC}"
-
-docker run -d --name mtproto_proxy --restart always \
-    -p $PROXY_PORT:443 \
-    telegramm/mtproto-proxy:latest \
-    docker-run-with-secret $SECRET 2>/dev/null || {
-    # Если официальный образ не работает, используем альтернативный подход или заглушку для демонстрации
-    # В реальном проде тут должен быть рабочий образ
-    log "Запуск стандартного образа... (убедитесь, что образ доступен)"
-    docker run -d --name mtproto_proxy --restart always -p $PROXY_PORT:443 alpine sleep infinity
-}
-
-progress_bar 2
-
-log "${YELLOW}Шаг 7: Создание Веб-Панели (Python/Flask)...${NC}"
-
-cat > "$PANEL_DIR/app.py" << 'PYEOF'
-import os
-import json
-import time
-import subprocess
-import threading
-import secrets
-from flask import Flask, render_template_string, request, jsonify, send_from_directory
-from datetime import datetime, timedelta
-import re
-
-app = Flask(__name__)
-PANEL_DIR = "/opt/mtproto-panel"
-CONFIG_FILE = os.path.join(PANEL_DIR, "config.json")
-USERS_FILE = os.path.join(PANEL_DIR, "users.json")
-
-# Load Config
-def load_config():
-    with open(CONFIG_FILE, 'r') as f:
-        return json.load(f)
-
-def save_config(cfg):
-    with open(CONFIG_FILE, 'w') as f:
-        json.dump(cfg, f, indent=4)
-
-def load_users():
-    if not os.path.exists(USERS_FILE):
-        return []
-    with open(USERS_FILE, 'r') as f:
-        return json.load(f)
-
-def save_users(users):
-    with open(USERS_FILE, 'w') as f:
-        json.dump(users, f, indent=4)
-
-config = load_config()
-
-# HTML Template (Modern Telegram Style)
-HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MTProto Panel 2026</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
-    <style>
-        body { font-family: 'Inter', sans-serif; background-color: #f1f5f9; }
-        .tg-card { background: white; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-        .tg-btn { transition: all 0.2s; }
-        .tg-btn:active { transform: scale(0.98); }
-        .status-dot { height: 10px; width: 10px; border-radius: 50%; display: inline-block; }
-        .status-online { background-color: #4ade80; box-shadow: 0 0 5px #4ade80; }
-        .status-offline { background-color: #ef4444; }
-        .sidebar-item { padding: 12px 16px; cursor: pointer; border-radius: 8px; color: #4b5563; }
-        .sidebar-item:hover { background-color: #eff6ff; color: #2563eb; }
-        .sidebar-item.active { background-color: #dbeafe; color: #1d4ed8; font-weight: 600; }
-        .input-sni { border: 1px solid #e2e8f0; padding: 8px 12px; border-radius: 8px; width: 100%; }
-        .sni-btn { margin: 4px; padding: 6px 12px; background: #f1f5f9; border-radius: 6px; cursor: pointer; font-size: 0.85rem; transition: 0.2s; }
-        .sni-btn:hover { background: #e2e8f0; }
-        .timer-box { font-family: monospace; background: #fffbeb; padding: 4px 8px; border-radius: 4px; color: #b45309; font-size: 0.9em; }
-    </style>
-</head>
-<body class="h-screen flex overflow-hidden">
-
-    <!-- Sidebar -->
-    <div class="w-64 bg-white border-r border-gray-200 flex-shrink-0 hidden md:flex flex-col">
-        <div class="p-6 border-b border-gray-100">
-            <h1 class="text-xl font-bold text-gray-800">MTProto Panel</h1>
-            <p class="text-xs text-gray-500 mt-1">by Mr_EFES 2026</p>
-        </div>
-        <nav class="flex-1 p-4 space-y-2">
-            <div onclick="showSection('dashboard')" id="nav-dashboard" class="sidebar-item active">📊 Статистика</div>
-            <div onclick="showSection('users')" id="nav-users" class="sidebar-item">👥 Список доступов</div>
-            <div onclick="showSection('settings')" id="nav-settings" class="sidebar-item">⚙️ Настройки</div>
-            <div onclick="showSection('admin')" id="nav-admin" class="sidebar-item">🔐 Администрирование</div>
-        </nav>
-        <div class="p-4 border-t border-gray-100 text-center text-xs text-gray-400">
-            MTProto Proxy Panel 2026 by Mr_EFES
-        </div>
-    </div>
-
-    <!-- Main Content -->
-    <div class="flex-1 flex flex-col h-screen overflow-hidden">
-        <!-- Mobile Header -->
-        <div class="md:hidden bg-white p-4 border-b flex justify-between items-center">
-            <span class="font-bold">MTProto Panel</span>
-            <button onclick="document.querySelector('.md\\:hidden').classList.toggle('hidden')" class="text-gray-600">☰</button>
-        </div>
-
-        <div class="flex-1 overflow-auto p-4 md:p-8" id="main-container">
-            
-            <!-- Dashboard Section -->
-            <div id="section-dashboard" class="space-y-6">
-                <h2 class="text-2xl font-bold text-gray-800 mb-6">Статистика Сервера</h2>
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    <div class="tg-card p-6">
-                        <div class="text-gray-500 text-sm mb-2">Статус сервера</div>
-                        <div class="flex items-center">
-                            <span id="server-status-badge" class="px-3 py-1 rounded-full text-sm font-medium bg-green-100 text-green-800">Работает</span>
-                        </div>
-                    </div>
-                    <div class="tg-card p-6">
-                        <div class="text-gray-500 text-sm mb-2">Uptime системы</div>
-                        <div id="uptime-display" class="text-xl font-semibold text-gray-800">Загрузка...</div>
-                    </div>
-                    <div class="tg-card p-6">
-                        <div class="text-gray-500 text-sm mb-2">Активные подключения (443)</div>
-                        <div id="active-conns" class="text-xl font-semibold text-blue-600">0</div>
-                        <div class="text-xs text-gray-400 mt-1">Всего доступов: <span id="total-users">0</span></div>
-                    </div>
-                </div>
-                
-                <div class="tg-card p-6 mt-6">
-                    <h3 class="font-semibold text-gray-700 mb-4">Быстрые действия</h3>
-                    <div class="flex gap-4">
-                        <button onclick="location.reload()" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 tg-btn">Обновить данные</button>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Users Section -->
-            <div id="section-users" class="hidden space-y-6">
-                <div class="flex justify-between items-center mb-6">
-                    <h2 class="text-2xl font-bold text-gray-800">Список доступов</h2>
-                    <button onclick="openCreateModal()" class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 tg-btn shadow-lg shadow-green-200">+ Новый доступ</button>
-                </div>
-
-                <div id="users-list" class="space-y-4">
-                    <!-- Users will be injected here -->
-                </div>
-            </div>
-
-            <!-- Settings Section -->
-            <div id="section-settings" class="hidden space-y-6">
-                <h2 class="text-2xl font-bold text-gray-800 mb-6">Настройки Прокси</h2>
-                <div class="tg-card p-6 max-w-2xl">
-                    <div class="mb-6">
-                        <label class="block text-sm font-medium text-gray-700 mb-2">Сайт для FakeTLS маскировки (SNI)</label>
-                        <div class="flex flex-wrap gap-2 mb-3">
-                            <span class="sni-btn" onclick="setSNI('ads.x5.ru')">ads.x5.ru</span>
-                            <span class="sni-btn" onclick="setSNI('1c.ru')">1c.ru</span>
-                            <span class="sni-btn" onclick="setSNI('ozon.ru')">ozon.ru</span>
-                            <span class="sni-btn" onclick="setSNI('vk.com')">vk.com</span>
-                            <span class="sni-btn" onclick="setSNI('max.ru')">max.ru</span>
-                        </div>
-                        <input type="text" id="sni-input" class="input-sni" value="{{ config.sni_default }}" placeholder="Введите свой домен">
-                        <p class="text-xs text-gray-500 mt-2">Нажмите на кнопку выше или введите свой вариант.</p>
-                    </div>
-                    
-                    <div class="border-t pt-4">
-                        <div class="flex justify-between items-center py-2">
-                            <span class="text-gray-700">Порт прокси:</span>
-                            <span class="font-mono font-bold">{{ config.proxy_port }}</span>
-                        </div>
-                        <div class="flex justify-between items-center py-2">
-                            <span class="text-gray-700">Домен прокси:</span>
-                            <span class="font-mono font-bold">{{ config.proxy_domain }}</span>
-                        </div>
-                    </div>
-                    
-                    <button onclick="saveSettings()" class="mt-6 w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 tg-btn">Сохранить настройки SNI</button>
-                </div>
-            </div>
-
-            <!-- Admin Section -->
-            <div id="section-admin" class="hidden space-y-6">
-                <h2 class="text-2xl font-bold text-gray-800 mb-6">Администрирование</h2>
-                <div class="tg-card p-6 max-w-md">
-                    <h3 class="font-semibold text-gray-700 mb-4">Изменить данные входа</h3>
-                    <div class="space-y-4">
-                        <div>
-                            <label class="block text-sm text-gray-600 mb-1">Новый Логин</label>
-                            <input type="text" id="new-admin-login" class="input-sni w-full">
-                        </div>
-                        <div>
-                            <label class="block text-sm text-gray-600 mb-1">Новый Пароль</label>
-                            <input type="password" id="new-admin-pass" class="input-sni w-full">
-                        </div>
-                        <button onclick="changeAdminCreds()" class="w-full bg-indigo-600 text-white py-2 rounded-lg hover:bg-indigo-700 tg-btn">Обновить данные</button>
-                    </div>
-                </div>
-                
-                <div class="tg-card p-6 max-w-md mt-6 border-l-4 border-red-500">
-                    <h3 class="font-semibold text-red-700 mb-2">Опасная зона</h3>
-                    <p class="text-sm text-gray-600 mb-4">Полный сброс панели удалит всех пользователей и настройки.</p>
-                    <button onclick="alert('Функция сброса требует подтверждения')" class="text-red-600 text-sm hover:underline">Сбросить панель к заводским настройкам</button>
-                </div>
-            </div>
-
-        </div>
-    </div>
-
-    <!-- Create User Modal -->
-    <div id="create-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50">
-        <div class="bg-white rounded-xl p-6 w-full max-w-md m-4 relative">
-            <button onclick="closeCreateModal()" class="absolute top-4 right-4 text-gray-400 hover:text-gray-600">✕</button>
-            <h3 class="text-xl font-bold mb-4">Новый доступ</h3>
-            <div class="space-y-4">
-                <div>
-                    <label class="block text-sm text-gray-600 mb-1">Имя устройства / Клиента</label>
-                    <input type="text" id="new-user-name" class="input-sni w-full" placeholder="iPhone 15 Pro">
-                </div>
-                <div>
-                    <label class="block text-sm text-gray-600 mb-1">Секретный ключ (оставьте пустым для авто)</label>
-                    <input type="text" id="new-user-secret" class="input-sni w-full font-mono text-sm" placeholder="Auto generate">
-                </div>
-                <button onclick="createUser()" class="w-full bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 tg-btn font-medium">Создать доступ</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- QR Modal -->
-    <div id="qr-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50">
-        <div class="bg-white rounded-xl p-6 w-full max-w-sm m-4 text-center relative">
-            <button onclick="document.getElementById('qr-modal').classList.add('hidden')" class="absolute top-4 right-4 text-gray-400">✕</button>
-            <h3 class="text-lg font-bold mb-4">QR Код для подключения</h3>
-            <div id="qrcode" class="flex justify-center mb-4"></div>
-            <p class="text-sm text-gray-500 mb-4">Отсканируйте камерой телефона или откройте ссылку ниже</p>
-            <input type="text" id="qr-link-display" readonly class="w-full text-xs p-2 bg-gray-100 rounded mb-4 text-center break-all">
-            <button onclick="copyQrLink()" class="w-full bg-blue-600 text-white py-2 rounded-lg">Копировать ссылку</button>
-        </div>
-    </div>
-
-    <script>
-        let currentUserForQR = null;
-
-        function showSection(id) {
-            document.querySelectorAll('[id^="section-"]').forEach(el => el.classList.add('hidden'));
-            document.getElementById('section-' + id).classList.remove('hidden');
-            
-            document.querySelectorAll('.sidebar-item').forEach(el => el.classList.remove('active'));
-            document.getElementById('nav-' + id).classList.add('active');
-            
-            if(id === 'users') loadUsers();
-            if(id === 'dashboard') loadStats();
-        }
-
-        function setSNI(val) {
-            document.getElementById('sni-input').value = val;
-        }
-
-        async function loadStats() {
-            try {
-                const res = await fetch('/api/stats');
-                const data = await res.json();
-                document.getElementById('uptime-display').innerText = data.uptime;
-                document.getElementById('active-conns').innerText = data.active_connections;
-                document.getElementById('total-users').innerText = data.total_users;
-                
-                const statusBadge = document.getElementById('server-status-badge');
-                if(data.server_status === 'running') {
-                    statusBadge.className = "px-3 py-1 rounded-full text-sm font-medium bg-green-100 text-green-800";
-                    statusBadge.innerText = "Работает";
-                } else {
-                    statusBadge.className = "px-3 py-1 rounded-full text-sm font-medium bg-red-100 text-red-800";
-                    statusBadge.innerText = "Отключен";
-                }
-            } catch (e) { console.error(e); }
-        }
-
-        async function loadUsers() {
-            const res = await fetch('/api/users');
-            const users = await res.json();
-            const container = document.getElementById('users-list');
-            container.innerHTML = '';
-
-            if(users.length === 0) {
-                container.innerHTML = '<div class="text-center text-gray-500 py-10">Список доступов пуст. Создайте первый доступ!</div>';
-                return;
-            }
-
-            users.forEach(user => {
-                const isPaused = user.paused;
-                const timerColor = user.days_left <= 0 ? 'text-red-600' : 'text-green-600';
-                const onlineClass = user.online ? 'status-online' : 'status-offline';
-                const onlineText = user.online ? 'В Сети' : 'Не в сети';
-                
-                // Format Timer
-                let timerText = "Истек";
-                if(user.days_left > 0) {
-                    timerText = `${user.days_left} дн. ${user.hours_left} ч. ${user.minutes_left} мин.`;
-                }
-
-                const html = `
-                <div class="tg-card p-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-l-4 ${isPaused ? 'border-yellow-400 opacity-75' : 'border-green-500'}">
-                    <div class="flex-1 min-w-0">
-                        <div class="flex items-center gap-2 mb-1">
-                            <h4 class="font-bold text-gray-800 truncate">${user.name}</h4>
-                            <span class="status-dot ${onlineClass}" title="${onlineText}"></span>
-                        </div>
-                        <div class="text-xs text-gray-500 mb-2">ID: ${user.id}</div>
-                        <div class="timer-box ${timerColor} font-medium">
-                             ⏳ Осталось: ${timerText}
-                        </div>
-                    </div>
-                    
-                    <div class="flex flex-wrap gap-2 items-center">
-                        <button onclick="togglePause('${user.id}')" class="px-3 py-1.5 rounded-md text-sm font-medium border ${isPaused ? 'bg-green-50 text-green-700 border-green-200' : 'bg-yellow-50 text-yellow-700 border-yellow-200'} hover:opacity-80">
-                            ${isPaused ? '▶ Вкл' : '⏸ Пауза'}
-                        </button>
-                        <button onclick="showQR('${user.link}')" class="px-3 py-1.5 bg-gray-100 text-gray-700 rounded-md text-sm hover:bg-gray-200">
-                            QR-код
-                        </button>
-                        <button onclick="copyLink('${user.link}')" class="px-3 py-1.5 bg-blue-50 text-blue-700 rounded-md text-sm hover:bg-blue-100">
-                            Копия
-                        </button>
-                        <button onclick="deleteUser('${user.id}')" class="px-3 py-1.5 bg-red-50 text-red-700 rounded-md text-sm hover:bg-red-100 ml-2">
-                            🗑
-                        </button>
-                    </div>
-                </div>`;
-                container.innerHTML += html;
-            });
-        }
-
-        function openCreateModal() { document.getElementById('create-modal').classList.remove('hidden'); }
-        function closeCreateModal() { document.getElementById('create-modal').classList.add('hidden'); }
-
-        async function createUser() {
-            const name = document.getElementById('new-user-name').value;
-            const secret = document.getElementById('new-user-secret').value;
-            if(!name) return alert('Введите имя');
-
-            await fetch('/api/users', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ name, secret: secret || null })
-            });
-            closeCreateModal();
-            loadUsers();
-        }
-
-        async function togglePause(id) {
-            await fetch(`/api/users/${id}/pause`, { method: 'POST' });
-            loadUsers();
-        }
-
-        async function deleteUser(id) {
-            if(confirm('Удалить этот доступ?')) {
-                await fetch(`/api/users/${id}`, { method: 'DELETE' });
-                loadUsers();
-            }
-        }
-
-        function copyLink(link) {
-            navigator.clipboard.writeText(link);
-            alert('Ссылка скопирована!');
-        }
-
-        function showQR(link) {
-            currentUserForQR = link;
-            document.getElementById('qr-modal').classList.remove('hidden');
-            document.getElementById('qrcode').innerHTML = "";
-            new QRCode(document.getElementById("qrcode"), {
-                text: link,
-                width: 200,
-                height: 200
-            });
-            document.getElementById('qr-link-display').value = link;
-        }
-
-        function copyQrLink() {
-            if(currentUserForQR) copyLink(currentUserForQR);
-        }
-
-        async function saveSettings() {
-            const sni = document.getElementById('sni-input').value;
-            await fetch('/api/settings', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ sni_default: sni })
-            });
-            alert('Настройки сохранены! Требуется перезапуск прокси.');
-        }
-
-        async function changeAdminCreds() {
-            const login = document.getElementById('new-admin-login').value;
-            const pass = document.getElementById('new-admin-pass').value;
-            if(!login || !pass) return alert('Заполните все поля');
-            
-            await fetch('/api/admin', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ login, password: pass })
-            });
-            alert('Данные обновлены! Перезайдите в панель.');
-            location.reload();
-        }
-
-        // Init
-        loadStats();
-        setInterval(loadStats, 10000); // Auto refresh stats
-    </script>
-</body>
-</html>
-"""
-
-@app.route('/')
-def index():
-    # Simple auth check via session could be added here, skipping for single-file simplicity
-    return render_template_string(HTML_TEMPLATE, config=config)
-
-@app.route('/api/stats')
-def get_stats():
-    # Get Uptime
-    try:
-        with open('/proc/uptime', 'r') as f:
-            uptime_seconds = float(f.readline().split()[0])
-            days = int(uptime_seconds // 86400)
-            hours = int((uptime_seconds % 86400) // 3600)
-            minutes = int((uptime_seconds % 3600) // 60)
-            uptime_str = f"{days}д {hours}ч {minutes}м"
-    except:
-        uptime_str = "N/A"
-
-    # Check Docker Status
-    try:
-        result = subprocess.run(['docker', 'inspect', '--format={{.State.Status}}', 'mtproto_proxy'], capture_output=True, text=True)
-        status = "running" if "running" in result.stdout else "stopped"
-    except:
-        status = "stopped"
-
-    # Count connections (simplified estimation via netstat or just user count for demo)
-    # Real connection count requires parsing netstat/ss which might be heavy, using random for demo if not root accessible easily
-    try:
-        # Attempt to count established connections on port 443
-        res = subprocess.run(['ss', '-tun', 'sport', ':443', 'state', 'established'], capture_output=True, text=True)
-        lines = res.stdout.strip().split('\n')
-        conns = len(lines) - 1 if len(lines) > 1 else 0
-        if conns < 0: conns = 0
-    except:
-        conns = 0
-
-    users = load_users()
-    
-    return jsonify({
-        "uptime": uptime_str,
-        "server_status": status,
-        "active_connections": conns,
-        "total_users": len(users)
-    })
-
-@app.route('/api/users')
-def get_users():
-    users = load_users()
-    now = time.time()
-    
-    processed_users = []
-    for u in users:
-        # Calculate Timer
-        if not u.get('paused'):
-            elapsed = now - u['created_at']
-            remaining_total = (30 * 24 * 3600) - elapsed
-            
-            if remaining_total <= 0:
-                # Auto pause if expired
-                u['paused'] = True
-                u['days_left'] = 0
-                u['hours_left'] = 0
-                u['minutes_left'] = 0
-                # Logic to delete after 32 days would go here in a cron job, handled simply here
-            else:
-                days = int(remaining_total // 86400)
-                hours = int((remaining_total % 86400) // 3600)
-                minutes = int((remaining_total % 3600) // 60)
-                u['days_left'] = days
-                u['hours_left'] = hours
-                u['minutes_left'] = minutes
-        
-        # Mock Online Status (In real scenario, check active TCP connections by IP/Port mapping)
-        # Here we simulate based on random or last_seen logic if implemented. 
-        # For this script, we assume offline unless connected recently.
-        u['online'] = False # Placeholder for real socket check
-        
-        processed_users.append(u)
-    
-    save_users(users) # Save state if auto-paused
-    return jsonify(processed_users)
-
-@app.route('/api/users', methods=['POST'])
-def add_user():
-    data = request.json
-    users = load_users()
-    
-    secret = data.get('secret')
-    if not secret:
-        secret = os.urandom(16).hex()
-    
-    # Construct Link
-    # Format: https://t.me/proxy?server=DOMAIN&port=PORT&secret=SECRET
-    link = f"https://t.me/proxy?server={config['proxy_domain']}&port={config['proxy_port']}&secret={secret}"
-    
-    new_user = {
-        "id": secrets.token_hex(4),
-        "name": data.get('name', 'Unknown'),
-        "secret": secret,
-        "link": link,
-        "created_at": time.time(),
-        "paused": False,
-        "pause_start": None,
-        "days_left": 30,
-        "hours_left": 23,
-        "minutes_left": 59
-    }
-    
-    users.append(new_user)
-    save_users(users)
-    
-    # Print to console for installer visibility
-    print(f"\n{GREEN}Новый пользователь создан:{NC}")
-    print(f"Имя: {new_user['name']}")
-    print(f"Ссылка: {link}")
-    
-    return jsonify({"success": True})
-
-@app.route('/api/users/<uid>/pause', methods=['POST'])
-def pause_user(uid):
-    users = load_users()
-    for u in users:
-        if u['id'] == uid:
-            if u['paused']:
-                # Resume
-                u['paused'] = False
-                # Adjust created_at to account for pause duration so timer continues correctly
-                if u.get('pause_start'):
-                    pause_duration = time.time() - u['pause_start']
-                    u['created_at'] += pause_duration
-                    u['pause_start'] = None
-            else:
-                # Pause
-                u['paused'] = True
-                u['pause_start'] = time.time()
-            save_users(users)
-            return jsonify({"success": True})
-    return jsonify({"error": "Not found"}), 404
-
-@app.route('/api/users/<uid>', methods=['DELETE'])
-def delete_user(uid):
-    users = load_users()
-    users = [u for u in users if u['id'] != uid]
-    save_users(users)
-    return jsonify({"success": True})
-
-@app.route('/api/settings', methods=['POST'])
-def update_settings():
-    data = request.json
-    cfg = load_config()
-    if 'sni_default' in data:
-        cfg['sni_default'] = data['sni_default']
-        # Here you would ideally restart the docker container with new env vars
-        # subprocess.run(['docker', 'restart', 'mtproto_proxy'])
-    save_config(cfg)
-    return jsonify({"success": True})
-
-@app.route('/api/admin', methods=['POST'])
-def update_admin():
-    data = request.json
-    cfg = load_config()
-    cfg['admin_user'] = data.get('login')
-    cfg['admin_pass'] = data.get('password')
-    save_config(cfg)
-    return jsonify({"success": True})
-
-if __name__ == '__main__':
-    # Run on port 8080 internally, proxied by Nginx
-    app.run(host='127.0.0.1', port=8080, debug=False)
-PYEOF
-
-# Install Flask
-pip3 install flask > /dev/null 2>&1
-progress_bar 2
-
-log "${YELLOW}Шаг 8: Настройка автозапуска панели...${NC}"
-
-cat > /etc/systemd/system/mtproto-panel.service <<EOF
+cat > /etc/systemd/system/telemt.service <<EOF
 [Unit]
-Description=MTProto Web Panel
-After=network.target docker.service
+Description=Telemt MTProto Proxy
+After=network.target
 
 [Service]
 Type=simple
 User=root
-WorkingDirectory=$PANEL_DIR
-ExecStart=/usr/bin/python3 $PANEL_DIR/app.py
+ExecStart=/usr/local/bin/telemt /etc/telemt/telemt.toml
 Restart=always
+RestartSec=3
+LimitNOFILE=65536
+Environment=RUST_LOG=info
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable mtproto-panel
-systemctl start mtproto-panel
-progress_bar 2
+systemctl enable telemt --now
+sleep 2
+if systemctl is-active --quiet telemt; then
+  log "${GREEN}telemt запущен.${RESET}"
+else
+  log "${RED}telemt не стартовал. Смотри journalctl -u telemt.${RESET}"
+  journalctl -u telemt --no-pager -n 20 || true
+  exit 1
+fi
+step_done "telemt запущен"
 
-# Final Output
-clear
-show_banner
+ufw allow 22/tcp >/dev/null 2>&1 || true
+ufw allow 443/tcp >/dev/null 2>&1 || true
+ufw allow "${PANEL_PORT}"/tcp >/dev/null 2>&1 || true
+ufw reload >/dev/null 2>&1 || true
+step_done "Firewall настроен"
 
-echo -e "${GREEN}✅ Установка успешно завершена!${NC}"
-echo ""
-echo -e "${CYAN}───────────────────────────────────────────────${NC}"
-echo -e "🌐 Панель управления: ${BLUE}https://$PANEL_DOMAIN:${PANEL_PORT}${NC}"
-echo -e "👤 Логин: ${YELLOW}$ADMIN_USER${NC}"
-echo -e "🔑 Пароль: ${YELLOW}$ADMIN_PASS${NC}"
-echo -e "${CYAN}───────────────────────────────────────────────${NC}"
-echo ""
-echo -e "${WHITE}Первый прокси (по умолчанию) создан в панели.${NC}"
-echo -e "${WHITE}QR-код доступен внутри панели после создания доступа.${NC}"
-echo ""
-echo -e "${YELLOW}Логи установки сохранены в: $LOG_FILE${NC}"
-echo ""
-log "Готово к работе."
+PANEL_DIR="/var/www/telemt-panel"
+APP_DIR="/var/lib/telemt-panel"
+
+cat > "${PANEL_DIR}/app.py" <<'PYEOF'
+import io
+import json
+import os
+import sqlite3
+import subprocess
+import secrets
+import re
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime, timedelta, timezone
+
+import qrcode
+import toml
+from flask import Flask, flash, redirect, render_template, request, send_file, session, url_for
+from werkzeug.security import check_password_hash, generate_password_hash
+
+APP_DIR = "/var/lib/telemt-panel"
+DB_PATH = os.path.join(APP_DIR, "panel.db")
+TELEMT_TOML = "/etc/telemt/telemt.toml"
+ACCESS_PERIOD_SECONDS = 31 * 24 * 3600 - 60
+
+app = Flask(__name__)
+app.secret_key = os.environ.get("PANEL_SECRET_KEY", "change-me")
+
+def db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    os.makedirs(APP_DIR, exist_ok=True)
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS admin (
+            id INTEGER PRIMARY KEY CHECK(id=1),
+            username TEXT NOT NULL,
+            password_hash TEXT NOT NULL
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS accesses (
+            username TEXT PRIMARY KEY,
+            device TEXT NOT NULL,
+            secret TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            duration_seconds INTEGER NOT NULL,
+            paused_total_seconds INTEGER NOT NULL DEFAULT 0,
+            paused_since TEXT,
+            paused_remaining_seconds INTEGER,
+            auto_paused_at TEXT,
+            status TEXT NOT NULL,
+            expires_at TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+def get_setting(key, default=""):
+    conn = db()
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    conn.close()
+    return row["value"] if row else default
+
+def set_setting(key, value):
+    conn = db()
+    conn.execute(
+        "INSERT INTO settings(key, value) VALUES(?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (key, value),
+    )
+    conn.commit()
+    conn.close()
+
+def get_admin():
+    conn = db()
+    row = conn.execute("SELECT username, password_hash FROM admin WHERE id = 1").fetchone()
+    conn.close()
+    return row
+
+def set_admin(username, password_hash):
+    conn = db()
+    conn.execute(
+        "INSERT INTO admin(id, username, password_hash) VALUES(1, ?, ?) "
+        "ON CONFLICT(id) DO UPDATE SET username=excluded.username, password_hash=excluded.password_hash",
+        (username, password_hash),
+    )
+    conn.commit()
+    conn.close()
+
+def utcnow():
+    return datetime.now(timezone.utc)
+
+def iso_now():
+    return utcnow().replace(microsecond=0).isoformat()
+
+def parse_dt(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+def fmt_rfc3339(dt):
+    return dt.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+def duration_left(row):
+    now = utcnow()
+    created = parse_dt(row["created_at"]) or now
+    duration = int(row["duration_seconds"])
+    paused_total = int(row["paused_total_seconds"] or 0)
+    paused_since = parse_dt(row["paused_since"])
+
+    if row["status"] == "active":
+        elapsed = (now - created).total_seconds() - paused_total
+    elif row["status"] in ("paused", "auto_paused"):
+        if paused_since:
+            elapsed = (paused_since - created).total_seconds() - paused_total
+        else:
+            elapsed = (now - created).total_seconds() - paused_total
+    else:
+        elapsed = (now - created).total_seconds() - paused_total
+
+    remaining = int(duration - elapsed)
+    return max(0, remaining)
+
+def fmt_remaining(seconds):
+    seconds = max(0, int(seconds))
+    days = seconds // 86400
+    hours = (seconds % 86400) // 3600
+    minutes = (seconds % 3600) // 60
+    return f"{days} дней {hours} часов {minutes} минут"
+
+def fmt_duration(total):
+    total = max(0, int(total))
+    days = total // 86400
+    hours = (total % 86400) // 3600
+    minutes = (total % 3600) // 60
+    if days > 0:
+        return f"{days} дней {hours} часов {minutes} минут"
+    if hours > 0:
+        return f"{hours} часов {minutes} минут"
+    return f"{minutes} минут"
+
+def system_uptime():
+    try:
+        with open("/proc/uptime", "r", encoding="utf-8") as f:
+            total = float(f.read().split()[0])
+        return fmt_duration(total)
+    except Exception:
+        return "н/д"
+
+def service_uptime(service="telemt"):
+    try:
+        service_us = subprocess.check_output(
+            ["systemctl", "show", service, "-p", "ActiveEnterTimestampMonotonic", "--value"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+        if not service_us or service_us == "0":
+            return "н/д"
+        service_us = int(service_us)
+        with open("/proc/uptime", "r", encoding="utf-8") as f:
+            boot_uptime = float(f.read().split()[0])
+        current_us = int(boot_uptime * 1_000_000)
+        return fmt_duration((current_us - service_us) / 1_000_000)
+    except Exception:
+        return "н/д"
+
+def telemt_running():
+    try:
+        r = subprocess.run(["systemctl", "is-active", "--quiet", "telemt"], timeout=5)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+def restart_telemt():
+    subprocess.run(["systemctl", "restart", "telemt"], check=False)
+
+def telemt_api_request(method, path, data=None):
+    token = get_setting("telemt_api_token")
+    url = f"http://127.0.0.1:9091{path}"
+    headers = {
+        "Authorization": token,
+        "Content-Type": "application/json",
+    }
+    body = None
+    if data is not None:
+        body = json.dumps(data).encode("utf-8")
+    req = urllib.request.Request(url, data=body, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            raw = resp.read().decode("utf-8")
+            payload = json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as exc:
+        try:
+            payload = json.loads(exc.read().decode("utf-8"))
+            message = payload.get("error", {}).get("message") or payload.get("message") or str(exc)
+        except Exception:
+            message = str(exc)
+        raise RuntimeError(message)
+    except urllib.error.URLError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+    if isinstance(payload, dict) and payload.get("ok") is True and "data" in payload:
+        return payload["data"]
+    return payload
+
+def telemt_api_get(path):
+    return telemt_api_request("GET", path)
+
+def telemt_api_post(path, data):
+    return telemt_api_request("POST", path, data)
+
+def telemt_api_delete(path):
+    return telemt_api_request("DELETE", path)
+
+def telemt_create_user(username, secret, expiration_rfc3339):
+    return telemt_api_post("/v1/users", {
+        "username": username,
+        "secret": secret,
+        "expiration_rfc3339": expiration_rfc3339,
+    })
+
+def normalize_ip_list(value):
+    if isinstance(value, list):
+        return [str(item) for item in value if item]
+    return []
+
+def load_online_users():
+    online = {}
+    for endpoint in ("/v1/stats/users/active-ips", "/v1/stats/users", "/v1/users", "/v1/runtime/connections/summary"):
+        try:
+            payload = telemt_api_get(endpoint)
+        except Exception:
+            continue
+        if isinstance(payload, dict):
+            for key in ("users", "active_users", "connections", "items"):
+                if isinstance(payload.get(key), list):
+                    payload = payload[key]
+                    break
+        if not isinstance(payload, list):
+            continue
+        for user in payload:
+            if not isinstance(user, dict):
+                continue
+            username = user.get("username")
+            if not username:
+                continue
+            item = online.setdefault(str(username), {"connections": 0, "ips": set()})
+            for key in ("active_ips", "active_unique_ips_list", "active_ip_list", "recent_ips"):
+                for ip in normalize_ip_list(user.get(key)):
+                    item["ips"].add(ip)
+            for key in ("current_connections", "active_connections", "tcp_connections"):
+                value = user.get(key)
+                if isinstance(value, int):
+                    item["connections"] = max(item["connections"], value)
+            if item["ips"] and item["connections"] == 0:
+                item["connections"] = len(item["ips"])
+        if online:
+            break
+    return online
+
+def make_link(secret):
+    host = get_setting("proxy_host", "127.0.0.1")
+    port = get_setting("proxy_port", "443")
+    tls_domain = get_setting("fake_tls_domain", "ads.x5.ru")
+    return f"tg://proxy?server={host}&port={port}&secret=ee{secret}{tls_domain.encode('utf-8').hex()}"
+
+def qr_png_bytes(link):
+    img = qrcode.make(link)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+def ensure_admin():
+    if get_admin() is None:
+        username = get_setting("default_admin_username", "admin")
+        password = get_setting("default_admin_password", "admin")
+        set_admin(username, generate_password_hash(password))
+
+@app.before_request
+def auth_guard():
+    allowed = {"login", "static"}
+    if request.endpoint in allowed or request.path.startswith("/static"):
+        return None
+    if "admin" not in session:
+        return redirect(url_for("login"))
+    admin = get_admin()
+    if not admin:
+        session.clear()
+        return redirect(url_for("login"))
+    if request.endpoint == "dashboard":
+        return None
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    admin = get_admin()
+    server_status = "Работает" if telemt_running() else "Отключен"
+    if request.method == "POST":
+        if admin and request.form.get("username") == admin["username"] and check_password_hash(admin["password_hash"], request.form.get("password", "")):
+            session["admin"] = admin["username"]
+            return redirect(url_for("dashboard"))
+        flash("Неверный логин или пароль", "danger")
+    return render_template("login.html", admin_username=admin["username"] if admin else "admin", server_status=server_status)
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
+
+@app.route("/")
+def dashboard():
+    conn = db()
+    accesses = conn.execute("SELECT * FROM accesses ORDER BY datetime(created_at) DESC").fetchall()
+    conn.close()
+
+    online_users = load_online_users()
+    total_created = len(accesses)
+    connected_ips = set()
+    active_users = 0
+
+    rows = []
+    for row in accesses:
+        remaining = duration_left(row)
+        status = row["status"]
+        online_data = online_users.get(row["username"], {"connections": 0, "ips": set()})
+        ips = online_data["ips"]
+        for ip in ips:
+            connected_ips.add(ip)
+        current_connections = int(online_data["connections"])
+        active_unique_ips = len(ips)
+        online = current_connections > 0 or active_unique_ips > 0
+        if online:
+            active_users += 1
+        rows.append({
+            **dict(row),
+            "remaining_text": fmt_remaining(remaining),
+            "online": online,
+            "online_class": "success" if online else "danger",
+            "current_connections": current_connections,
+            "active_unique_ips": active_unique_ips,
+            "status_label": status,
+            "link": make_link(row["secret"]),
+        })
+
+    server_status = "Работает" if telemt_running() else "Отключен"
+    return render_template(
+        "dashboard.html",
+        accesses=rows,
+        total_created=total_created,
+        connected_ips=len(connected_ips),
+        active_users=active_users,
+        server_status=server_status,
+        telemt_uptime=service_uptime("telemt"),
+        system_uptime=system_uptime(),
+        fake_tls_domain=get_setting("fake_tls_domain", "ads.x5.ru"),
+        proxy_host=get_setting("proxy_host", "127.0.0.1"),
+        proxy_port=get_setting("proxy_port", "443"),
+    )
+
+@app.route("/create", methods=["POST"])
+def create_access():
+    nickname = (request.form.get("nickname", "") or "").strip()
+    device = (request.form.get("device", "") or "Phone").strip()
+    if not nickname:
+        flash("Укажи имя доступа", "danger")
+        return redirect(url_for("dashboard"))
+
+    base_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", f"{nickname}_{device}")[:64]
+    username = base_name or f"user_{secrets.token_hex(3)}"
+    conn = db()
+    used = conn.execute("SELECT username FROM accesses WHERE username = ?", (username,)).fetchone()
+    suffix = 2
+    while used:
+        candidate = f"{base_name[:58]}_{suffix}"
+        used = conn.execute("SELECT username FROM accesses WHERE username = ?", (candidate,)).fetchone()
+        if not used:
+            username = candidate[:64]
+            break
+        suffix += 1
+
+    secret = secrets.token_hex(16)
+    now = utcnow()
+    expires = now + timedelta(seconds=ACCESS_PERIOD_SECONDS)
+    try:
+        telemt_create_user(username, secret, fmt_rfc3339(expires))
+    except Exception as exc:
+        flash(f"Не удалось создать доступ: {exc}", "danger")
+        conn.close()
+        return redirect(url_for("dashboard"))
+
+    conn.execute(
+        """
+        INSERT INTO accesses(
+            username, device, secret, created_at, duration_seconds,
+            paused_total_seconds, paused_since, paused_remaining_seconds,
+            auto_paused_at, status, expires_at
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            username,
+            device,
+            secret,
+            fmt_rfc3339(now),
+            ACCESS_PERIOD_SECONDS,
+            0,
+            None,
+            None,
+            None,
+            "active",
+            fmt_rfc3339(expires),
+        ),
+    )
+    conn.commit()
+    conn.close()
+    flash(f"Доступ {username} создан", "success")
+    return redirect(url_for("dashboard"))
+
+@app.route("/toggle/<username>", methods=["POST"])
+def toggle_access(username):
+    conn = db()
+    row = conn.execute("SELECT * FROM accesses WHERE username = ?", (username,)).fetchone()
+    if not row:
+        conn.close()
+        flash("Доступ не найден", "danger")
+        return redirect(url_for("dashboard"))
+
+    now = utcnow()
+
+    try:
+        if row["status"] == "active":
+            remaining = duration_left(row)
+            conn.execute(
+                "UPDATE accesses SET status=?, paused_since=?, paused_remaining_seconds=?, auto_paused_at=NULL WHERE username=?",
+                ("paused", fmt_rfc3339(now), int(remaining), username),
+            )
+            telemt_api_delete("/v1/users/" + urllib.parse.quote(username))
+            flash(f"Доступ {username} поставлен на паузу и соединение разорвано", "success")
+        else:
+            if row["status"] == "auto_paused":
+                new_expires = now + timedelta(seconds=ACCESS_PERIOD_SECONDS)
+                conn.execute(
+                    """
+                    UPDATE accesses
+                    SET status='active',
+                        created_at=?,
+                        duration_seconds=?,
+                        paused_total_seconds=0,
+                        paused_since=NULL,
+                        paused_remaining_seconds=NULL,
+                        auto_paused_at=NULL,
+                        expires_at=?
+                    WHERE username=?
+                    """,
+                    (fmt_rfc3339(now), ACCESS_PERIOD_SECONDS, fmt_rfc3339(new_expires), username),
+                )
+                telemt_create_user(username, row["secret"], fmt_rfc3339(new_expires))
+                flash(f"Доступ {username} включен и таймер сброшен на новый цикл", "success")
+            else:
+                paused_since = parse_dt(row["paused_since"]) or now
+                remaining = int(row["paused_remaining_seconds"] or duration_left(row))
+                paused_total_seconds = int(row["paused_total_seconds"] or 0) + int((now - paused_since).total_seconds())
+                new_expires = now + timedelta(seconds=max(0, remaining))
+                conn.execute(
+                    """
+                    UPDATE accesses
+                    SET status='active',
+                        paused_total_seconds=?,
+                        paused_since=NULL,
+                        paused_remaining_seconds=NULL,
+                        auto_paused_at=NULL,
+                        expires_at=?
+                    WHERE username=?
+                    """,
+                    (paused_total_seconds, fmt_rfc3339(new_expires), username),
+                )
+                telemt_create_user(username, row["secret"], fmt_rfc3339(new_expires))
+                flash(f"Доступ {username} возобновлен", "success")
+        conn.commit()
+    except Exception as exc:
+        flash(f"Ошибка: {exc}", "danger")
+    finally:
+        conn.close()
+    return redirect(url_for("dashboard"))
+
+@app.route("/delete/<username>", methods=["POST"])
+def delete_access(username):
+    conn = db()
+    row = conn.execute("SELECT * FROM accesses WHERE username = ?", (username,)).fetchone()
+    if not row:
+        conn.close()
+        flash("Доступ не найден", "danger")
+        return redirect(url_for("dashboard"))
+    try:
+        telemt_api_delete("/v1/users/" + urllib.parse.quote(username))
+        conn.execute("DELETE FROM accesses WHERE username = ?", (username,))
+        conn.commit()
+        flash(f"Доступ {username} удалён", "success")
+    except Exception as exc:
+        flash(f"Ошибка удаления: {exc}", "danger")
+    finally:
+        conn.close()
+    return redirect(url_for("dashboard"))
+
+@app.route("/qr/<username>")
+def qr_public(username):
+    conn = db()
+    row = conn.execute("SELECT * FROM accesses WHERE username = ?", (username,)).fetchone()
+    conn.close()
+    if not row:
+        return "Not found", 404
+    return send_file(qr_png_bytes(make_link(row["secret"])), mimetype="image/png", as_attachment=False, download_name=f"{username}.png")
+
+@app.route("/link/<username>")
+def open_link(username):
+    conn = db()
+    row = conn.execute("SELECT * FROM accesses WHERE username = ?", (username,)).fetchone()
+    conn.close()
+    if not row:
+        return "Not found", 404
+    return redirect(make_link(row["secret"]))
+
+@app.route("/settings", methods=["GET", "POST"])
+def settings():
+    if request.method == "POST":
+        fake_domain = (request.form.get("fake_tls_domain") or "").strip()
+        proxy_host = (request.form.get("proxy_host") or "").strip()
+        proxy_port = (request.form.get("proxy_port") or "443").strip()
+        if not fake_domain or not proxy_host:
+            flash("FakeTLS-домен и домен прокси обязательны", "danger")
+            return redirect(url_for("settings"))
+        if not re.match(r"^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$", fake_domain):
+            flash("FakeTLS/SNI должен быть корректным доменом", "danger")
+            return redirect(url_for("settings"))
+        if not re.match(r"^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$", proxy_host):
+            flash("Домен прокси должен быть корректным", "danger")
+            return redirect(url_for("settings"))
+        try:
+            proxy_port_int = int(proxy_port)
+            if proxy_port_int <= 0 or proxy_port_int > 65535:
+                raise ValueError("invalid port")
+            cfg = toml.load(TELEMT_TOML)
+            cfg.setdefault("censorship", {})
+            cfg["censorship"]["tls_domain"] = fake_domain
+            cfg.setdefault("general", {})
+            cfg["general"].setdefault("links", {})
+            cfg["general"]["links"]["public_host"] = proxy_host
+            cfg["general"]["links"]["public_port"] = proxy_port_int
+            with open(TELEMT_TOML, "w", encoding="utf-8") as f:
+                toml.dump(cfg, f)
+            set_setting("fake_tls_domain", fake_domain)
+            set_setting("proxy_host", proxy_host)
+            set_setting("proxy_port", str(proxy_port_int))
+            restart_telemt()
+            flash("Настройки FakeTLS обновлены", "success")
+        except Exception as exc:
+            flash(f"Не удалось обновить настройки: {exc}", "danger")
+
+    return render_template(
+        "settings.html",
+        fake_tls_domain=get_setting("fake_tls_domain", "ads.x5.ru"),
+        proxy_host=get_setting("proxy_host", "127.0.0.1"),
+        proxy_port=get_setting("proxy_port", "443"),
+        server_status="Работает" if telemt_running() else "Отключен",
+        telemt_uptime=service_uptime("telemt"),
+        system_uptime=system_uptime(),
+    )
+
+@app.route("/admin/credentials", methods=["GET", "POST"])
+def admin_credentials():
+    admin = get_admin()
+    server_status = "Работает" if telemt_running() else "Отключен"
+    if request.method == "POST":
+        current_user = request.form.get("current_username", "")
+        current_pass = request.form.get("current_password", "")
+        new_user = request.form.get("new_username", "").strip() or admin["username"]
+        new_pass = request.form.get("new_password", "")
+        if not admin or current_user != admin["username"] or not check_password_hash(admin["password_hash"], current_pass):
+            flash("Текущие данные неверны", "danger")
+            return redirect(url_for("admin_credentials"))
+        if not new_pass:
+            flash("Новый пароль обязателен", "danger")
+            return redirect(url_for("admin_credentials"))
+        set_admin(new_user, generate_password_hash(new_pass))
+        session.clear()
+        flash("Данные администратора обновлены. Войдите заново.", "success")
+        return redirect(url_for("login"))
+    return render_template("admin_credentials.html", current_username=admin["username"] if admin else "admin", server_status=server_status)
+
+@app.route("/bootstrap-link")
+def bootstrap_link():
+    row = db().execute("SELECT * FROM accesses ORDER BY datetime(created_at) ASC LIMIT 1").fetchone()
+    if not row:
+        return "No bootstrap access", 404
+    return redirect(url_for("qr_public", username=row["username"]))
+
+def auto_maintain():
+    conn = db()
+    rows = conn.execute("SELECT * FROM accesses").fetchall()
+    changed = False
+    deleted_users = []
+    for row in rows:
+        try:
+            now = utcnow()
+            if row["status"] == "active":
+                remaining = duration_left(row)
+                if remaining <= 0:
+                    conn.execute(
+                        """
+                        UPDATE accesses
+                        SET status='auto_paused',
+                            paused_since=?,
+                            paused_remaining_seconds=0,
+                            auto_paused_at=?,
+                            expires_at=?
+                        WHERE username=?
+                        """,
+                        (
+                            fmt_rfc3339(now),
+                            fmt_rfc3339(now),
+                            fmt_rfc3339(now - timedelta(minutes=1)),
+                            row["username"],
+                        ),
+                    )
+                    try:
+                        telemt_api_delete("/v1/users/" + urllib.parse.quote(row["username"]))
+                    except Exception:
+                        pass
+                    changed = True
+            elif row["status"] == "auto_paused":
+                paused_at = parse_dt(row["auto_paused_at"]) or parse_dt(row["paused_since"]) or utcnow()
+                if (utcnow() - paused_at).total_seconds() >= 2 * 24 * 3600:
+                    try:
+                        telemt_api_delete("/v1/users/" + urllib.parse.quote(row["username"]))
+                    except Exception:
+                        pass
+                    conn.execute("DELETE FROM accesses WHERE username = ?", (row["username"],))
+                    deleted_users.append(row["username"])
+                    changed = True
+        except Exception:
+            pass
+    if changed:
+        conn.commit()
+    if deleted_users:
+        app.logger.info("Удалены неактивные доступы после 32-го дня: %s", ", ".join(deleted_users))
+    conn.close()
+
+if __name__ == "__main__":
+    init_db()
+    ensure_admin()
+    auto_maintain()
+    port = int(os.environ.get("PANEL_PORT", "4444"))
+    app.run(host="0.0.0.0", port=port)
+PYEOF
+
+cat > "${PANEL_DIR}/templates/layout.html" <<'HTMLEOF'
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>MTProto Proxy Panel</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" rel="stylesheet">
+  <style>
+    :root{
+      --tg-bg:#f4f8fd;
+      --tg-card:#ffffff;
+      --tg-line:#dbe5f1;
+      --tg-text:#0f172a;
+      --tg-muted:#64748b;
+      --tg-blue:#2aabee;
+      --tg-green:#22c55e;
+      --tg-red:#ef4444;
+    }
+    body{
+      min-height:100vh;
+      background:
+        radial-gradient(circle at top left, rgba(42,171,238,.16), transparent 28%),
+        radial-gradient(circle at top right, rgba(34,197,94,.12), transparent 24%),
+        linear-gradient(180deg, #eef5fb 0%, #f7fbff 100%);
+      color:var(--tg-text);
+      font-family: Inter, "Segoe UI", system-ui, -apple-system, sans-serif;
+    }
+    .navbar, .card, .modal-content{
+      background: rgba(255,255,255,.94) !important;
+      backdrop-filter: blur(14px);
+      border: 1px solid var(--tg-line);
+      box-shadow: 0 14px 45px rgba(15,23,42,.08);
+    }
+    .navbar{ background: linear-gradient(90deg, var(--tg-blue), #6bc5f5) !important; color:#fff !important; }
+    .navbar .navbar-brand, .navbar .btn, .navbar .chip{ color:#fff; }
+    .navbar .btn{ border-color: rgba(255,255,255,.45); }
+    .navbar .btn:hover{ background: rgba(255,255,255,.12); }
+    .card{ border-radius: 22px; }
+    .navbar{ border-radius: 0 0 22px 22px; }
+    .page-shell{ max-width: 1360px; }
+    .text-muted{ color: var(--tg-muted) !important; }
+    .btn{
+      border-radius: 14px;
+      font-weight: 700;
+    }
+    .btn-primary{ background: var(--tg-blue); border-color: var(--tg-blue); }
+    .btn-outline-light{ color:#fff; border-color: rgba(255,255,255,.45); }
+    .btn-outline-secondary{ border-color: #cbd5e1; }
+    .form-control, .form-select{
+      background: #fff;
+      color: var(--tg-text);
+      border: 1px solid var(--tg-line);
+      border-radius: 14px;
+    }
+    .form-control:focus, .form-select:focus{
+      background: #fff;
+      color: var(--tg-text);
+      border-color: var(--tg-blue);
+      box-shadow: 0 0 0 .2rem rgba(42,171,238,.16);
+    }
+    .summary-card{
+      border-radius: 22px;
+      padding: 1rem 1.1rem;
+      height: 100%;
+    }
+    .summary-label{ color: var(--tg-muted); font-size: .84rem; }
+    .summary-value{ font-size: 1.45rem; font-weight: 800; line-height: 1.1; word-break: break-word; }
+    .access-name{ font-weight: 800; font-size: 1.03rem; }
+    .access-meta{ color: var(--tg-muted); font-size: .86rem; }
+    .dot{ display:inline-block; width:10px; height:10px; border-radius:999px; margin-right:.4rem; }
+    .dot.green{ background: var(--tg-green); box-shadow: 0 0 0 4px rgba(34,197,94,.18); }
+    .dot.red{ background: var(--tg-red); box-shadow: 0 0 0 4px rgba(239,68,68,.18); }
+    .chip{ display:inline-flex; align-items:center; gap:.35rem; padding:.28rem .55rem; border-radius:999px; font-size:.82rem; border:1px solid var(--tg-line); background: rgba(255,255,255,.6); white-space: nowrap; }
+    .footer{ color: var(--tg-muted); font-size: .9rem; text-align:center; padding: 1rem 0 1.6rem; }
+    .access-list{ display: grid; gap: .85rem; }
+    .access-card{ border: 1px solid var(--tg-line); border-radius: 18px; padding: 1rem; background: rgba(255,255,255,.72); box-shadow: 0 8px 25px rgba(15,23,42,.05); }
+    .link-box{ width: 100%; min-height: 5rem; resize: vertical; font-size: .82rem; border-radius: 14px; }
+    .small-btns .btn{ padding: .4rem .58rem; }
+    .section-title{ display:flex; align-items:center; gap:.65rem; font-size: 1.08rem; font-weight: 800; }
+    .sni-pill{ cursor:pointer; user-select:none; }
+    .sni-pill:hover{ transform: translateY(-1px); }
+    @media (max-width: 992px){
+      .summary-value{ font-size: 1.2rem; }
+      .navbar{ border-radius: 0 0 18px 18px; }
+      .card{ border-radius: 18px; }
+    }
+  </style>
+</head>
+<body>
+  <nav class="navbar navbar-expand-lg sticky-top mb-4">
+    <div class="container-fluid page-shell px-3 px-lg-4 py-2">
+      <a class="navbar-brand fw-bold d-flex align-items-center gap-2" href="{{ url_for('dashboard') }}">
+        <i class="fa-brands fa-telegram"></i> MTProto Proxy Panel
+      </a>
+      {% if session.get('admin') %}
+      <div class="ms-auto d-flex align-items-center gap-2 flex-wrap justify-content-end">
+        <span class="chip"><span class="dot {{ 'green' if server_status == 'Работает' else 'red' }}"></span>{{ server_status }}</span>
+        <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('settings') }}"><i class="fa-solid fa-sliders me-1"></i>Настройки</a>
+        <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('admin_credentials') }}"><i class="fa-solid fa-user-gear me-1"></i>Админ</a>
+        <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('logout') }}"><i class="fa-solid fa-right-from-bracket me-1"></i>Выход</a>
+      </div>
+      {% endif %}
+    </div>
+  </nav>
+
+  <main class="container page-shell px-3 px-lg-4">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="mb-4">
+        {% for category, message in messages %}
+          <div class="alert alert-{{ category }} border-0 shadow-sm rounded-4 mb-2" role="alert">
+            <i class="fa-solid fa-circle-info me-2"></i>{{ message }}
+          </div>
+        {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="footer">
+    MTProto Proxy Panel 2026 by Mr_EFES
+  </footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>
+HTMLEOF
+
+cat > "${PANEL_DIR}/templates/login.html" <<'HTMLEOF'
+{% extends "layout.html" %}
+{% block content %}
+<div class="row justify-content-center align-items-center" style="min-height: 72vh;">
+  <div class="col-12 col-md-8 col-lg-5">
+    <div class="card">
+      <div class="card-body p-4 p-md-5">
+        <div class="text-center mb-4">
+          <div class="display-6 mb-2"><i class="fa-brands fa-telegram"></i></div>
+          <h1 class="h3 mb-2">Вход в панель</h1>
+          <div class="text-muted">Управление MTProto Proxy</div>
+        </div>
+        <form method="post" class="vstack gap-3">
+          <div>
+            <label class="form-label text-muted mb-1">Логин</label>
+            <input class="form-control form-control-lg" type="text" name="username" required autofocus>
+          </div>
+          <div>
+            <label class="form-label text-muted mb-1">Пароль</label>
+            <input class="form-control form-control-lg" type="password" name="password" required>
+          </div>
+          <button class="btn btn-primary btn-lg w-100" type="submit">
+            <i class="fa-solid fa-right-to-bracket me-2"></i>Войти
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+HTMLEOF
+
+cat > "${PANEL_DIR}/templates/dashboard.html" <<'HTMLEOF'
+{% extends "layout.html" %}
+{% block content %}
+<div class="row g-3 mb-4">
+  <div class="col-12 col-lg-3">
+    <div class="summary-card card">
+      <div class="summary-label">Общее количество доступов</div>
+      <div class="summary-value">{{ total_created }}</div>
+    </div>
+  </div>
+  <div class="col-12 col-lg-3">
+    <div class="summary-card card">
+      <div class="summary-label">IP-адресов онлайн</div>
+      <div class="summary-value">{{ connected_ips }}</div>
+    </div>
+  </div>
+  <div class="col-12 col-lg-3">
+    <div class="summary-card card">
+      <div class="summary-label">Активных подключений</div>
+      <div class="summary-value">{{ active_users }}</div>
+    </div>
+  </div>
+  <div class="col-12 col-lg-3">
+    <div class="summary-card card">
+      <div class="summary-label">FakeTLS SNI</div>
+      <div class="summary-value">{{ fake_tls_domain }}</div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-4 align-items-start">
+  <div class="col-12 col-lg-4">
+    <div class="card mb-4">
+      <div class="card-body p-4 p-md-5">
+        <div class="section-title mb-3"><i class="fa-solid fa-plus text-primary"></i>Создать новый доступ</div>
+        <form method="post" action="{{ url_for('create_access') }}" class="vstack gap-3">
+          <div>
+            <label class="form-label text-muted mb-1">Имя</label>
+            <input class="form-control" name="nickname" placeholder="Например: Ivan" required>
+          </div>
+          <div>
+            <label class="form-label text-muted mb-1">Устройство</label>
+            <select class="form-select" name="device">
+              <option value="Phone">Телефон</option>
+              <option value="PC">Компьютер</option>
+              <option value="Tablet">Планшет</option>
+            </select>
+          </div>
+          <button class="btn btn-primary w-100" type="submit"><i class="fa-solid fa-wand-magic-sparkles me-2"></i>Создать</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="card mb-4">
+      <div class="card-body p-4">
+        <div class="section-title mb-3"><i class="fa-solid fa-circle-info text-primary"></i>Сервер</div>
+        <div class="vstack gap-2">
+          <span class="chip"><span class="dot {{ 'green' if server_status == 'Работает' else 'red' }}"></span>{{ server_status }}</span>
+          <div class="access-meta">Uptime сервера: {{ telemt_uptime }}</div>
+          <div class="access-meta">Uptime системы: {{ system_uptime }}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-lg-8">
+    <div class="card mb-4">
+      <div class="card-body p-4 p-md-5">
+        <div class="section-title mb-3"><i class="fa-solid fa-list text-primary"></i>Список доступов</div>
+        <div class="access-list">
+          {% for item in accesses %}
+          <div class="access-card">
+            <div class="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-3">
+              <div>
+                <div class="access-name">{{ item.username }}</div>
+                <div class="access-meta">Устройство: {{ item.device }}</div>
+                <div class="fw-semibold mt-2">Осталось: {{ item.remaining_text }}</div>
+                <div class="access-meta">
+                  {% if item.status_label == 'active' %}
+                    Статус доступа: активен
+                  {% elif item.status_label == 'paused' %}
+                    Статус доступа: пауза
+                  {% else %}
+                    Статус доступа: автопауза
+                  {% endif %}
+                </div>
+              </div>
+              <div class="text-lg-end">
+                <span class="chip"><span class="dot {{ 'green' if item.online else 'red' }}"></span>{{ 'В сети' if item.online else 'Не в сети' }}</span>
+                <div class="access-meta mt-2">{{ item.current_connections }} соединений / {{ item.active_unique_ips }} IP</div>
+              </div>
+            </div>
+
+            <textarea class="form-control link-box mb-3" id="link-{{ loop.index }}" readonly>{{ item.link }}</textarea>
+
+            <div class="d-flex flex-wrap gap-2 small-btns">
+              <button class="btn btn-outline-secondary btn-sm" type="button" onclick="copyLink('link-{{ loop.index }}', this)">
+                <i class="fa-solid fa-copy me-1"></i>Копия
+              </button>
+              <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('open_link', username=item.username) }}">
+                <i class="fa-brands fa-telegram me-1"></i>Открыть
+              </a>
+              <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('qr_public', username=item.username) }}" download="{{ item.username }}.png">
+                <i class="fa-solid fa-download me-1"></i>PNG
+              </a>
+              <button class="btn btn-outline-secondary btn-sm" type="button" data-bs-toggle="modal" data-bs-target="#qrModal" data-qr-url="{{ url_for('qr_public', username=item.username) }}" data-qr-name="{{ item.username }}">
+                <i class="fa-solid fa-qrcode me-1"></i>QR-код
+              </button>
+              <form method="post" action="{{ url_for('toggle_access', username=item.username) }}">
+                <button class="btn btn-warning btn-sm" type="submit">
+                  {% if item.status_label == 'active' %}
+                    <i class="fa-solid fa-pause me-1"></i>Пауза
+                  {% else %}
+                    <i class="fa-solid fa-play me-1"></i>Вкл
+                  {% endif %}
+                </button>
+              </form>
+              <form method="post" action="{{ url_for('delete_access', username=item.username) }}" onsubmit="return confirm('Удалить доступ {{ item.username }}?');">
+                <button class="btn btn-danger btn-sm" type="submit"><i class="fa-solid fa-trash me-1"></i>Удалить</button>
+              </form>
+            </div>
+          </div>
+          {% else %}
+          <div class="text-center text-muted py-5">
+            <i class="fa-solid fa-box-open fa-2x mb-2"></i>
+            <div>Пока нет доступов</div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="qrModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header border-0">
+        <h5 class="modal-title">QR-код подключения</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body text-center">
+        <img id="qrImage" src="" alt="QR" class="img-fluid rounded-4 border border-light-subtle">
+        <div class="mt-3 text-muted small" id="qrName"></div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function copyLink(id, btn){
+    const value = document.getElementById(id).value;
+    navigator.clipboard.writeText(value).then(() => {
+      const old = btn.innerHTML;
+      btn.innerHTML = '<i class="fa-solid fa-check me-1"></i>Скопировано';
+      setTimeout(() => { btn.innerHTML = old; }, 1400);
+    });
+  }
+  const qrModal = document.getElementById('qrModal');
+  qrModal?.addEventListener('show.bs.modal', event => {
+    const button = event.relatedTarget;
+    const url = button.getAttribute('data-qr-url');
+    const name = button.getAttribute('data-qr-name');
+    document.getElementById('qrImage').src = url;
+    document.getElementById('qrName').textContent = name;
+  });
+</script>
+{% endblock %}
+HTMLEOF
+
+cat > "${PANEL_DIR}/templates/settings.html" <<'HTMLEOF'
+{% extends "layout.html" %}
+{% block content %}
+<div class="row g-4 mb-4">
+  <div class="col-12 col-lg-4">
+    <div class="summary-card card">
+      <div class="summary-label">Статус сервера</div>
+      <div class="summary-value">{{ server_status }}</div>
+    </div>
+  </div>
+  <div class="col-12 col-lg-4">
+    <div class="summary-card card">
+      <div class="summary-label">Uptime сервера</div>
+      <div class="summary-value">{{ telemt_uptime }}</div>
+    </div>
+  </div>
+  <div class="col-12 col-lg-4">
+    <div class="summary-card card">
+      <div class="summary-label">Uptime системы</div>
+      <div class="summary-value">{{ system_uptime }}</div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-4">
+  <div class="col-12 col-lg-7">
+    <div class="card">
+      <div class="card-body p-4 p-md-5">
+        <div class="section-title mb-3"><i class="fa-solid fa-wand-magic-sparkles"></i>Настройки прокси</div>
+        <form method="post" class="vstack gap-3">
+          <div>
+            <label class="form-label text-muted mb-1">Сайт для FakeTLS маскировки</label>
+            <input id="fake_tls_domain" name="fake_tls_domain" class="form-control form-control-lg" value="{{ fake_tls_domain }}" required>
+            <div class="mt-3 d-flex flex-wrap gap-2">
+              <span class="chip sni-pill" data-sni="ads.x5.ru">ads.x5.ru</span>
+              <span class="chip sni-pill" data-sni="1c.ru">1c.ru</span>
+              <span class="chip sni-pill" data-sni="ozon.ru">ozon.ru</span>
+              <span class="chip sni-pill" data-sni="vk.com">vk.com</span>
+              <span class="chip sni-pill" data-sni="max.ru">max.ru</span>
+            </div>
+          </div>
+          <div class="row g-3">
+            <div class="col-12 col-md-8">
+              <label class="form-label text-muted mb-1">Домен прокси</label>
+              <input class="form-control" name="proxy_host" value="{{ proxy_host }}" required>
+            </div>
+            <div class="col-12 col-md-4">
+              <label class="form-label text-muted mb-1">Порт</label>
+              <input class="form-control" name="proxy_port" value="{{ proxy_port }}" required>
+            </div>
+          </div>
+          <button class="btn btn-primary" type="submit"><i class="fa-solid fa-arrows-rotate me-2"></i>Сохранить и перезапустить</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.querySelectorAll('.sni-pill').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const input = document.getElementById('fake_tls_domain');
+      if (input) input.value = btn.dataset.sni;
+    });
+  });
+</script>
+{% endblock %}
+HTMLEOF
+
+cat > "${PANEL_DIR}/templates/admin_credentials.html" <<'HTMLEOF'
+{% extends "layout.html" %}
+{% block content %}
+<div class="row g-4">
+  <div class="col-12 col-lg-7">
+    <div class="card">
+      <div class="card-body p-4 p-md-5">
+        <div class="section-title mb-3"><i class="fa-solid fa-user-gear"></i>Изменить логин и пароль администратора</div>
+        <form method="post" class="vstack gap-3">
+          <div class="row g-3">
+            <div class="col-12 col-md-6">
+              <label class="form-label text-muted mb-1">Текущий логин</label>
+              <input class="form-control" name="current_username" value="{{ current_username }}" required>
+            </div>
+            <div class="col-12 col-md-6">
+              <label class="form-label text-muted mb-1">Текущий пароль</label>
+              <input class="form-control" type="password" name="current_password" required>
+            </div>
+            <div class="col-12 col-md-6">
+              <label class="form-label text-muted mb-1">Новый логин</label>
+              <input class="form-control" name="new_username" placeholder="Оставь пустым, чтобы не менять">
+            </div>
+            <div class="col-12 col-md-6">
+              <label class="form-label text-muted mb-1">Новый пароль</label>
+              <input class="form-control" type="password" name="new_password" required>
+            </div>
+          </div>
+          <button class="btn btn-primary" type="submit"><i class="fa-solid fa-floppy-disk me-2"></i>Сохранить</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+HTMLEOF
+
+python3 -m venv "${PANEL_DIR}/venv"
+"${PANEL_DIR}/venv/bin/pip" install --upgrade pip
+"${PANEL_DIR}/venv/bin/pip" install Flask gunicorn toml werkzeug qrcode pillow
+step_done "Python окружение готово"
+
+"${PANEL_DIR}/venv/bin/python" <<PY
+from pathlib import Path
+from werkzeug.security import generate_password_hash
+import sqlite3
+
+db_path = Path("${APP_DIR}") / "panel.db"
+conn = sqlite3.connect(db_path)
+conn.execute("PRAGMA journal_mode=WAL;")
+conn.execute("""
+CREATE TABLE IF NOT EXISTS admin (
+    id INTEGER PRIMARY KEY CHECK(id=1),
+    username TEXT NOT NULL,
+    password_hash TEXT NOT NULL
+)
+""")
+conn.execute("""
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+)
+""")
+conn.execute("""
+CREATE TABLE IF NOT EXISTS accesses (
+    username TEXT PRIMARY KEY,
+    device TEXT NOT NULL,
+    secret TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    duration_seconds INTEGER NOT NULL,
+    paused_total_seconds INTEGER NOT NULL DEFAULT 0,
+    paused_since TEXT,
+    paused_remaining_seconds INTEGER,
+    auto_paused_at TEXT,
+    status TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+)
+""")
+settings = {
+    "proxy_host": "${PROXY_DOMAIN}",
+    "proxy_port": "443",
+    "fake_tls_domain": "${FAKE_DOMAIN}",
+    "telemt_api_token": "${API_TOKEN}",
+    "default_admin_username": "${PANEL_ADMIN_USER}",
+    "default_admin_password": "${PANEL_ADMIN_PASS}",
+}
+for k, v in settings.items():
+    conn.execute(
+        "INSERT INTO settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (k, v),
+    )
+conn.execute(
+    "INSERT INTO admin(id, username, password_hash) VALUES(1, ?, ?) ON CONFLICT(id) DO UPDATE SET username=excluded.username, password_hash=excluded.password_hash",
+    ("${PANEL_ADMIN_USER}", generate_password_hash("${PANEL_ADMIN_PASS}")),
+)
+conn.commit()
+conn.close()
+PY
+
+step_done "База панели создана"
+
+cat > /usr/local/bin/telemt-panel-maintain.py <<'PYEOF'
+import json
+import sqlite3
+import urllib.parse
+import urllib.request
+from datetime import datetime, timedelta, timezone
+
+DB_PATH = "/var/lib/telemt-panel/panel.db"
+
+def db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def get_setting(conn, key, default=""):
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else default
+
+def utcnow():
+    return datetime.now(timezone.utc)
+
+def parse_dt(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+def fmt_rfc3339(dt):
+    return dt.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+def duration_left(row):
+    now = utcnow()
+    created = parse_dt(row["created_at"]) or now
+    duration = int(row["duration_seconds"])
+    paused_total = int(row["paused_total_seconds"] or 0)
+    paused_since = parse_dt(row["paused_since"])
+    if row["status"] == "active":
+        elapsed = (now - created).total_seconds() - paused_total
+    elif row["status"] in ("paused", "auto_paused"):
+        if paused_since:
+            elapsed = (paused_since - created).total_seconds() - paused_total
+        else:
+            elapsed = (now - created).total_seconds() - paused_total
+    else:
+        elapsed = (now - created).total_seconds() - paused_total
+    return max(0, int(duration - elapsed))
+
+def request_api(method, path, token, data=None):
+    url = f"http://127.0.0.1:9091{path}"
+    headers = {"Authorization": token, "Content-Type": "application/json"}
+    body = json.dumps(data).encode("utf-8") if data is not None else None
+    req = urllib.request.Request(url, data=body, headers=headers, method=method)
+    with urllib.request.urlopen(req, timeout=12) as resp:
+        payload = json.loads(resp.read().decode("utf-8") or "{}")
+    if payload.get("ok") is True and "data" in payload:
+        return payload["data"]
+    return payload
+
+def patch_user(token, username, expiration):
+    request_api("PATCH", "/v1/users/" + urllib.parse.quote(username), token, {"expiration_rfc3339": expiration})
+
+def delete_user(token, username):
+    request_api("DELETE", "/v1/users/" + urllib.parse.quote(username), token)
+
+def main():
+    conn = db()
+    token = get_setting(conn, "telemt_api_token")
+    rows = conn.execute("SELECT * FROM accesses").fetchall()
+    changed = False
+    now = utcnow()
+
+    for row in rows:
+        try:
+            if row["status"] == "active":
+                remaining = duration_left(row)
+                if remaining <= 0:
+                    paused_at = now
+                    conn.execute(
+                        """
+                        UPDATE accesses
+                        SET status='auto_paused',
+                            paused_since=?,
+                            paused_remaining_seconds=0,
+                            auto_paused_at=?,
+                            expires_at=?
+                        WHERE username=?
+                        """,
+                        (fmt_rfc3339(paused_at), fmt_rfc3339(paused_at), fmt_rfc3339(paused_at - timedelta(minutes=1)), row["username"]),
+                    )
+                    patch_user(token, row["username"], fmt_rfc3339(paused_at - timedelta(minutes=1)))
+                    changed = True
+            elif row["status"] == "auto_paused":
+                paused_at = parse_dt(row["auto_paused_at"]) or parse_dt(row["paused_since"]) or now
+                if (now - paused_at).total_seconds() >= 2 * 24 * 3600:
+                    try:
+                        delete_user(token, row["username"])
+                    except Exception:
+                        pass
+                    conn.execute("DELETE FROM accesses WHERE username = ?", (row["username"],))
+                    changed = True
+        except Exception:
+            pass
+
+    if changed:
+        conn.commit()
+    conn.close()
+
+if __name__ == "__main__":
+    main()
+PYEOF
+chmod +x /usr/local/bin/telemt-panel-maintain.py
+
+cat > /etc/systemd/system/telemt-panel.service <<EOF
+[Unit]
+Description=MTProto Proxy Web Panel
+After=network.target telemt.service
+Requires=telemt.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=${PANEL_DIR}
+Environment="PANEL_SECRET_KEY=${PANEL_SECRET_KEY}"
+Environment="PANEL_PORT=${PANEL_PORT}"
+ExecStart=${PANEL_DIR}/venv/bin/gunicorn --workers 2 --threads 4 --bind 0.0.0.0:${PANEL_PORT} --certfile /etc/letsencrypt/live/${PANEL_DOMAIN}/fullchain.pem --keyfile /etc/letsencrypt/live/${PANEL_DOMAIN}/privkey.pem --access-logfile - --error-logfile - --capture-output app:app
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable telemt-panel --now
+sleep 2
+if systemctl is-active --quiet telemt-panel; then
+  log "${GREEN}Панель запущена и отвечает.${RESET}"
+else
+  log "${RED}Панель не стартовала. Смотри journalctl -u telemt-panel.${RESET}"
+  journalctl -u telemt-panel --no-pager -n 20 || true
+  exit 1
+fi
+step_done "Панель готова"
+
+cat > /etc/cron.d/telemt-panel-maintain <<EOF
+* * * * * root /usr/local/bin/telemt-panel-maintain.py >/dev/null 2>&1
+0 3 * * * root certbot renew --post-hook 'systemctl restart telemt telemt-panel' >/dev/null 2>&1
+0 4 * * * root /usr/local/bin/telemt-updater.sh >/dev/null 2>&1
+EOF
+
+cat > /usr/local/bin/telemt-updater.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+ARCH="$(uname -m)"
+case "$ARCH" in
+  x86_64) BIN_ARCH="x86_64" ;;
+  aarch64|arm64) BIN_ARCH="aarch64" ;;
+  *) exit 0 ;;
+esac
+TMP_DIR="$(mktemp -d)"
+wget -q "https://github.com/telemt/telemt/releases/latest/download/telemt-${BIN_ARCH}-linux-gnu.tar.gz" -O "${TMP_DIR}/telemt.tar.gz" || exit 0
+tar -xzf "${TMP_DIR}/telemt.tar.gz" -C "${TMP_DIR}" || exit 0
+systemctl stop telemt || true
+install -m 755 "${TMP_DIR}/telemt" /usr/local/bin/telemt
+systemctl start telemt || true
+rm -rf "${TMP_DIR}"
+EOF
+chmod +x /usr/local/bin/telemt-updater.sh
+step_done "Автообновление включено"
+
+generate_bootstrap() {
+  "${PANEL_DIR}/venv/bin/python" <<PY
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+import sqlite3
+
+db_path = Path("${APP_DIR}") / "panel.db"
+conn = sqlite3.connect(db_path)
+conn.row_factory = sqlite3.Row
+settings = {row["key"]: row["value"] for row in conn.execute("SELECT key, value FROM settings")}
+proxy_host = settings["proxy_host"]
+proxy_port = settings["proxy_port"]
+fake_domain = settings["fake_tls_domain"]
+username = "${INITIAL_USERNAME}"
+secret = "${INITIAL_SECRET}"
+duration_seconds = 31 * 24 * 3600 - 60
+created_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00","Z")
+expires_at = (datetime.now(timezone.utc) + timedelta(seconds=duration_seconds)).replace(microsecond=0).isoformat().replace("+00:00","Z")
+
+conn.execute(
+    """
+    INSERT INTO accesses(username, device, secret, created_at, duration_seconds, paused_total_seconds, paused_since, paused_remaining_seconds, auto_paused_at, status, expires_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?)
+    ON CONFLICT(username) DO UPDATE SET
+      device=excluded.device,
+      secret=excluded.secret,
+      created_at=excluded.created_at,
+      duration_seconds=excluded.duration_seconds,
+      paused_total_seconds=excluded.paused_total_seconds,
+      paused_since=excluded.paused_since,
+      paused_remaining_seconds=excluded.paused_remaining_seconds,
+      auto_paused_at=excluded.auto_paused_at,
+      status=excluded.status,
+      expires_at=excluded.expires_at
+    """,
+    (username, "Phone", secret, created_at, duration_seconds, 0, None, None, None, "active", expires_at),
+)
+conn.commit()
+conn.close()
+
+link = f"tg://proxy?server={proxy_host}&port={proxy_port}&secret=ee{secret}{fake_domain.encode('utf-8').hex()}"
+print(link)
+PY
+}
+
+BOOTSTRAP_LINK="$(generate_bootstrap)"
+step_done "Первый доступ создан"
+
+log ""
+log "${BOLD}Ссылка для подключения:${RESET}"
+log "${GREEN}${BOOTSTRAP_LINK}${RESET}"
+if command -v qrencode >/dev/null 2>&1; then
+  printf "%s\n" "${BOOTSTRAP_LINK}" | qrencode -t ANSIUTF8
+else
+  log "${YELLOW}qrencode не найден, QR-код не показан.${RESET}"
+fi
+log ""
+log "${BOLD}Панель:${RESET} https://${PANEL_DOMAIN}:${PANEL_PORT}"
+log "${BOLD}Логин:${RESET} ${PANEL_ADMIN_USER}"
+log "${BOLD}Пароль:${RESET} ${PANEL_ADMIN_PASS}"
+log "${YELLOW}Смените данные администратора после входа.${RESET}"
+log ""
+log "${GREEN}${BOLD}УСТАНОВКА ЗАВЕРШЕНА УСПЕШНО.${RESET}"
