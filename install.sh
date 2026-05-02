@@ -25,16 +25,18 @@ show_banner() {
     echo -e "${RESET}"
 }
 
-# ── Функция выпуска/проверки SSL сертификата ────────────────────────────
+# Функция выпуска/проверки SSL сертификата с email
 issue_ssl() {
     local domain=$1
     local email=$2
     local cert_path="/etc/letsencrypt/live/${domain}/fullchain.pem"
 
     if [[ -f "$cert_path" ]]; then
+        # Проверяем действительность сертификата (действителен ли еще 24 часа)
         if openssl x509 -in "$cert_path" -noout -checkend 86400 >/dev/null 2>&1; then
             echo "exist"
         else
+            # Сертификат истек или истекает, перевыпускаем
             if [[ -n "$email" ]]; then
                 certbot certonly --standalone -d "${domain}" --email "${email}" --agree-tos --non-interactive --quiet >/dev/null 2>&1
             else
@@ -47,6 +49,7 @@ issue_ssl() {
             fi
         fi
     else
+        # Сертификата нет, выпускаем новый
         if [[ -n "$email" ]]; then
             certbot certonly --standalone -d "${domain}" --email "${email}" --agree-tos --non-interactive --quiet >/dev/null 2>&1
         else
@@ -60,134 +63,140 @@ issue_ssl() {
     fi
 }
 
-# ── Прогресс-шаг ────────────────────────────────────────────────────────
-step() {
-    echo -e "\n${BLUE}${BOLD}[$1]${RESET} $2"
-}
-info() {
-    echo -e "${CYAN}$1${RESET}"
-}
-success() {
-    echo -e "${GREEN}$1${RESET}"
-}
-error() {
-    echo -e "${RED}$1${RESET}"
-}
-
 show_banner
 
 if [[ $EUID -ne 0 ]]; then
-    error "Ошибка: запустите скрипт от имени root."
+    echo -e "${RED}Ошибка: запустите скрипт от имени root.${RESET}"
     exit 1
 fi
 
-step "1/13" "Установка системных зависимостей..."
+echo -e "${YELLOW}Проверка необходимых пакетов...${RESET}"
 apt-get update -qq >/dev/null 2>&1
-apt-get install -y -qq curl wget jq openssl certbot xxd socat ufw python3 python3-pip python3-venv iproute2 net-tools qrencode >/dev/null 2>&1
-success "Системные пакеты установлены."
+apt-get install -y -qq curl wget jq openssl certbot xxd socat ufw python3 python3-pip python3-venv iproute2 net-tools >/dev/null 2>&1
 
+# Останавливаем веб-серверы которые могут занимать порт 80
 systemctl stop nginx apache2 2>/dev/null || true
 
 # ==========================================
-# СБОР ВВОДНЫХ ДАННЫХ
+# ЧАСТЬ 1: СБОР ВВОДНЫХ ДАННЫХ
 # ==========================================
-step "2/13" "Сбор параметров установки..."
+echo -e "${BOLD}--- НАСТРОЙКА ПРОКСИ И ПАНЕЛИ ---${RESET}"
+echo ""
 
-echo -e "${YELLOW}1. Укажите Домен ПРОКСИ (напр. tg.example.com):${RESET}"
-read -rp "> " PROXY_DOMAIN
+# Домен для ПРОКСИ (порт 443)
+read -rp "Введите домен для ПРОКСИ (напр. tg.example.com): " PROXY_DOMAIN
 if [[ -z "${PROXY_DOMAIN}" ]]; then
-    error "Домен для прокси обязателен!"
+    echo -e "${RED}Домен для прокси обязателен!${RESET}"
     exit 1
 fi
 
-echo -e "${YELLOW}2. Укажите Домен ПАНЕЛИ (напр. admin.example.com):${RESET}"
-read -rp "> " PANEL_DOMAIN
+# Домен для ПАНЕЛИ
+read -rp "Введите домен для ПАНЕЛИ УПРАВЛЕНИЯ (напр. admin.example.com): " PANEL_DOMAIN
 if [[ -z "${PANEL_DOMAIN}" ]]; then
-    error "Домен для панели обязателен!"
+    echo -e "${RED}Домен для панели обязателен!${RESET}"
     exit 1
 fi
 
-echo -e "${YELLOW}3. Укажите порт для панели управления [по умолчанию 4444]:${RESET}"
-read -rp "> " PANEL_PORT_INPUT
+# Порт для панели
+read -rp "Введите порт для панели управления [по умолчанию 4444]: " PANEL_PORT_INPUT
 PANEL_PORT=${PANEL_PORT_INPUT:-4444}
 
-echo -e "${YELLOW}4. Введите Email для SSL-сертификатов Let's Encrypt (необязательно):${RESET}"
-read -rp "> " CERT_EMAIL
+# Email для сертификатов
+read -rp "Введите Email для SSL-сертификатов Let's Encrypt (необязательно): " CERT_EMAIL
 
 echo ""
-info "Параметры установки:"
-echo -e "  Прокси домен: ${PROXY_DOMAIN} (порт 443)"
-echo -e "  Панель домен: ${PANEL_DOMAIN} (порт ${PANEL_PORT})"
+echo -e "${CYAN}Параметры установки:${RESET}"
+echo -e "  ${BLUE}Прокси домен:${RESET} ${PROXY_DOMAIN} (порт 443)"
+echo -e "  ${BLUE}Панель домен:${RESET} ${PANEL_DOMAIN} (порт ${PANEL_PORT})"
 if [[ -n "${CERT_EMAIL}" ]]; then
-    echo -e "  Email для сертификатов: ${CERT_EMAIL}"
+    echo -e "  ${BLUE}Email для сертификатов:${RESET} ${CERT_EMAIL}"
 else
-    echo -e "  Email: не указан"
+    echo -e "  ${YELLOW}Email для сертификатов:${RESET} не указан"
 fi
+echo ""
 
 # ==========================================
-# SSL СЕРТИФИКАТЫ
+# ЧАСТЬ 2: ВЫПУСК SSL СЕРТИФИКАТОВ
 # ==========================================
-step "3/13" "Выпуск SSL сертификатов..."
+echo -e "${BOLD}--- ВЫПУСК SSL СЕРТИФИКАТОВ ---${RESET}"
 
+# Сертификат для ПРОКСИ
+echo -ne "${YELLOW}Проверка/выпуск сертификата для ${PROXY_DOMAIN}... ${RESET}"
 ssl_proxy_status=$(issue_ssl "$PROXY_DOMAIN" "$CERT_EMAIL")
 case "$ssl_proxy_status" in
-    "exist") success "Прокси: сертификат существует и действителен" ;;
-    "new") success "Прокси: сертификат выпущен" ;;
-    "renewed") success "Прокси: сертификат обновлён" ;;
-    *) error "Ошибка выпуска SSL для прокси. Проверьте A-запись домена."; exit 1 ;;
+    "exist")
+        echo -e "${GREEN}Найден существующий (действителен)${RESET}"
+        ;;
+    "new")
+        echo -e "${GREEN}Успешно выпущен новый${RESET}"
+        ;;
+    "renewed")
+        echo -e "${GREEN}Успешно обновлен${RESET}"
+        ;;
+    "error")
+        echo -e "${RED}ОШИБКА выпуска SSL! Проверьте A-запись домена.${RESET}"
+        exit 1
+        ;;
 esac
 
+# Сертификат для ПАНЕЛИ
+echo -ne "${YELLOW}Проверка/выпуск сертификата для ${PANEL_DOMAIN}... ${RESET}"
 ssl_panel_status=$(issue_ssl "$PANEL_DOMAIN" "$CERT_EMAIL")
 case "$ssl_panel_status" in
-    "exist") success "Панель: сертификат существует и действителен" ;;
-    "new") success "Панель: сертификат выпущен" ;;
-    "renewed") success "Панель: сертификат обновлён" ;;
-    *) error "Ошибка выпуска SSL для панели. Проверьте A-запись домена."; exit 1 ;;
+    "exist")
+        echo -e "${GREEN}Найден существующий (действителен)${RESET}"
+        ;;
+    "new")
+        echo -e "${GREEN}Успешно выпущен новый${RESET}"
+        ;;
+    "renewed")
+        echo -e "${GREEN}Успешно обновлен${RESET}"
+        ;;
+    "error")
+        echo -e "${RED}ОШИБКА выпуска SSL! Проверьте A-запись домена.${RESET}"
+        exit 1
+        ;;
 esac
+echo ""
 
 # ==========================================
-# FAKE TLS
+# ЧАСТЬ 3: УСТАНОВКА ПРОКСИ
 # ==========================================
-step "4/13" "Выбор Fake TLS маскировки..."
+echo -e "${BOLD}--- УСТАНОВКА MTProto ПРОКСИ ---${RESET}"
+
+# Выбор домена для Fake TLS маскировки
 echo -e "${BOLD}Выберите домен для Fake TLS маскировки:${RESET}"
-echo "  1) ads.x5.ru"
-echo "  2) 1c.ru"
-echo "  3) ozon.ru"
-echo "  4) vk.com"
-echo "  5) max.ru"
-echo "  6) Свой вариант"
-read -rp "Ваш выбор [1-6, Enter = 5]: " FAKE_CHOICE
-case "${FAKE_CHOICE:-5}" in
-    1) FAKE_DOMAIN="ads.x5.ru" ;;
-    2) FAKE_DOMAIN="1c.ru" ;;
+echo "1) max.ru (по умолчанию)"
+echo "2) vk.com"
+echo "3) ozon.ru"
+echo "4) Свой вариант"
+read -rp "Ваш выбор [1-4, Enter = 1]: " FAKE_CHOICE
+case "${FAKE_CHOICE:-1}" in
+    2) FAKE_DOMAIN="vk.com" ;;
     3) FAKE_DOMAIN="ozon.ru" ;;
-    4) FAKE_DOMAIN="vk.com" ;;
-    5) FAKE_DOMAIN="max.ru" ;;
-    6)
-        read -rp "Введите свой домен для маскировки: " CUSTOM_FAKE
-        FAKE_DOMAIN=${CUSTOM_FAKE:-max.ru}
+    4)
+        read -rp "Введите свой домен для маскировки: " FAKE_DOMAIN
+        if [[ -z "$FAKE_DOMAIN" ]]; then
+            FAKE_DOMAIN="max.ru"
+        fi
         ;;
     *) FAKE_DOMAIN="max.ru" ;;
 esac
-success "Fake TLS домен: ${FAKE_DOMAIN}"
 
-# ==========================================
-# УСТАНОВКА ПРОКСИ
-# ==========================================
-step "5/13" "Установка ядра Telemt..."
+echo -e "${YELLOW}Установка ядра Telemt...${RESET}"
 ARCH=$(uname -m)
 case "$ARCH" in
     "x86_64") BIN_ARCH="x86_64" ;;
     "aarch64"|"arm64") BIN_ARCH="aarch64" ;;
     *)
-        error "Неподдерживаемая архитектура: $ARCH"
+        echo -e "${RED}Неподдерживаемая архитектура: $ARCH${RESET}"
         exit 1
         ;;
 esac
 
 DL_URL="https://github.com/telemt/telemt/releases/latest/download/telemt-${BIN_ARCH}-linux-gnu.tar.gz"
 if ! wget -q "$DL_URL" -O /tmp/telemt.tar.gz; then
-    error "Не удалось скачать Telemt!"
+    echo -e "${RED}Не удалось скачать Telemt!${RESET}"
     exit 1
 fi
 
@@ -199,6 +208,7 @@ rm -f /tmp/telemt.tar.gz
 USER_SECRET=$(openssl rand -hex 16)
 mkdir -p /etc/telemt
 
+# Создаем конфиг Telemt
 cat > /etc/telemt/telemt.toml << EOF
 [general]
 use_middle_proxy = true
@@ -218,6 +228,7 @@ tls_domain = "${FAKE_DOMAIN}"
 admin_default = "${USER_SECRET}"
 EOF
 
+# Создаем systemd службу
 cat > /etc/systemd/system/telemt.service << EOF
 [Unit]
 Description=Telemt MTProto Proxy
@@ -239,51 +250,68 @@ systemctl daemon-reload
 systemctl enable telemt --now >/dev/null 2>&1
 sleep 2
 
+# Проверка работы сервиса через systemctl и ss
+echo -ne "${YELLOW}Проверка службы Telemt... ${RESET}"
 if systemctl is-active --quiet telemt; then
-    success "Служба Telemt запущена"
+    echo -e "${GREEN}РАБОТАЕТ${RESET}"
 else
-    error "Служба Telemt не запустилась! Логи:"
+    echo -e "${RED}НЕ РАБОТАЕТ${RESET}"
+    echo -e "${YELLOW}Логи службы:${RESET}"
     journalctl -u telemt --no-pager -n 5
 fi
 
+echo -ne "${YELLOW}Проверка прослушивания порта 443... ${RESET}"
 if ss -tulpen 2>/dev/null | grep -q ":443" || netstat -tulpen 2>/dev/null | grep -q ":443"; then
-    success "Порт 443 прослушивается"
+    echo -e "${GREEN}ПОРТ 443 ОТКРЫТ${RESET}"
 else
-    info "Порт 443 не обнаружен в ss, но это может быть нормально."
+    # Дополнительная проверка через lsof
+    if command -v lsof >/dev/null 2>&1 && lsof -i :443 >/dev/null 2>&1; then
+        echo -e "${GREEN}ПОРТ 443 ОТКРЫТ${RESET}"
+    else
+        echo -e "${YELLOW}Порт 443 не найден в списке слушающих (это может быть нормально для некоторых конфигураций)${RESET}"
+    fi
 fi
 
+# Генерация ссылки для подключения
 HEX_DOMAIN=$(printf '%s' "${FAKE_DOMAIN}" | xxd -p | tr -d '\n')
 FINAL_SECRET="ee${USER_SECRET}${HEX_DOMAIN}"
 TG_LINK="tg://proxy?server=${PROXY_DOMAIN}&port=443&secret=${FINAL_SECRET}"
 
 echo ""
-info "Ссылка для подключения:"
+echo -e "${CYAN}${BOLD}Ссылка для подключения к прокси:${RESET}"
 echo -e "${GREEN}${TG_LINK}${RESET}"
 echo ""
-info "QR-код для подключения:"
-qrencode -t ANSIUTF8 "$TG_LINK"
 
 # ==========================================
-# FIREWALL
+# ЧАСТЬ 4: НАСТРОЙКА FIREWALL
 # ==========================================
-step "6/13" "Настройка файрвола..."
+echo -e "${BOLD}--- НАСТРОЙКА FIREWALL (UFW) ---${RESET}"
+
+# Разрешаем необходимые порты
 ufw allow 22/tcp >/dev/null 2>&1 || true
 ufw allow 443/tcp >/dev/null 2>&1
 ufw allow ${PANEL_PORT}/tcp >/dev/null 2>&1
+
+# Перезагружаем UFW если он активен
 if ufw status >/dev/null 2>&1; then
     ufw --force reload >/dev/null 2>&1
-    success "Правила UFW применены (22, 443, ${PANEL_PORT})"
+    echo -e "${GREEN}Правила firewall применены${RESET}"
+    echo -e "  - Порт 443 (Прокси): ${GREEN}открыт${RESET}"
+    echo -e "  - Порт ${PANEL_PORT} (Панель): ${GREEN}открыт${RESET}"
 else
-    info "UFW не активен, порты будут открыты при включении"
+    echo -e "${YELLOW}UFW не активен, порты будут открыты при включении${RESET}"
 fi
+echo ""
 
 # ==========================================
-# WEB ПАНЕЛЬ
+# ЧАСТЬ 5: УСТАНОВКА WEB UI ПАНЕЛИ
 # ==========================================
-step "7/13" "Подготовка структуры панели..."
+echo -e "${BOLD}--- УСТАНОВКА WEB UI ПАНЕЛИ ---${RESET}"
+
 PANEL_DIR="/var/www/telemt-panel"
-mkdir -p "$PANEL_DIR/templates" "$PANEL_DIR/static"
+mkdir -p "$PANEL_DIR/templates"
 
+# Конфигурация панели
 if [[ ! -f "$PANEL_DIR/panel_config.json" ]]; then
     cat > "$PANEL_DIR/panel_config.json" << EOF
 {
@@ -295,7 +323,9 @@ if [[ ! -f "$PANEL_DIR/panel_config.json" ]]; then
     "secret_key": "$(openssl rand -hex 24)"
 }
 EOF
+    echo -e "${GREEN}Конфигурация панели создана${RESET}"
 else
+    # Обновляем proxy_host в существующем конфиге
     python3 -c "
 import json
 with open('$PANEL_DIR/panel_config.json', 'r') as f:
@@ -305,34 +335,33 @@ config['proxy_port'] = 443
 with open('$PANEL_DIR/panel_config.json', 'w') as f:
     json.dump(config, f, indent=4)
 " 2>/dev/null || true
+    echo -e "${YELLOW}Существующая конфигурация сохранена${RESET}"
 fi
 
-# Файл состояний пользователей
-if [[ ! -f "$PANEL_DIR/users_state.json" ]]; then
-    echo "{}" > "$PANEL_DIR/users_state.json"
-fi
-
-step "8/13" "Настройка Python окружения..."
+# Установка Python зависимостей
+echo -e "${YELLOW}Настройка Python окружения...${RESET}"
 if [[ ! -d "$PANEL_DIR/venv" ]]; then
     python3 -m venv "$PANEL_DIR/venv"
 fi
+
 "$PANEL_DIR/venv/bin/pip" install -q --upgrade pip >/dev/null 2>&1
-"$PANEL_DIR/venv/bin/pip" install -q Flask gunicorn toml werkzeug qrcode[pil] >/dev/null 2>&1
-success "Зависимости Python установлены"
+# ИСПРАВЛЕНО: добавлен модуль toml
+"$PANEL_DIR/venv/bin/pip" install -q Flask gunicorn toml werkzeug >/dev/null 2>&1
+echo -e "${GREEN}Python зависимости установлены${RESET}"
 
-step "9/13" "Создание backend приложения..."
-
+# Backend приложение
 cat > "$PANEL_DIR/app.py" << 'PYEOF'
-import os, json, secrets, toml, subprocess, datetime, time
-from io import BytesIO
-from flask import Flask, render_template, request, redirect, url_for, session, flash, send_file
+import os
+import json
+import secrets
+import toml
+import subprocess
+from flask import Flask, render_template, request, redirect, url_for, session, flash
 from werkzeug.security import generate_password_hash, check_password_hash
-import qrcode
 
 app = Flask(__name__)
 CONFIG_PATH = 'panel_config.json'
 TELEMT_TOML = '/etc/telemt/telemt.toml'
-USERS_STATE_PATH = 'users_state.json'
 
 def load_config():
     with open(CONFIG_PATH, 'r') as f:
@@ -342,15 +371,13 @@ def save_config(data):
     with open(CONFIG_PATH, 'w') as f:
         json.dump(data, f, indent=4)
 
-def load_users_state():
-    if not os.path.exists(USERS_STATE_PATH):
-        return {}
-    with open(USERS_STATE_PATH, 'r') as f:
-        return json.load(f)
+config = load_config()
+app.secret_key = config.get('secret_key', secrets.token_hex(16))
 
-def save_users_state(data):
-    with open(USERS_STATE_PATH, 'w') as f:
-        json.dump(data, f, indent=4)
+# Если пароль по умолчанию, генерируем хэш
+if "..." in config.get('password_hash', ''):
+    config['password_hash'] = generate_password_hash('admin')
+    save_config(config)
 
 def restart_telemt():
     try:
@@ -358,100 +385,32 @@ def restart_telemt():
     except Exception:
         pass
 
-def get_telemt_users_toml():
-    if not os.path.exists(TELEMT_TOML):
-        return {}
-    with open(TELEMT_TOML, 'r') as f:
-        config = toml.load(f)
-    return config.get('access', {}).get('users', {})
-
-def update_telemt_users_toml(users_dict):
-    with open(TELEMT_TOML, 'r') as f:
-        config = toml.load(f)
-    if 'access' not in config:
-        config['access'] = {}
-    config['access']['users'] = users_dict
-    with open(TELEMT_TOML, 'w') as f:
-        toml.dump(config, f)
-    restart_telemt()
-
-def server_uptime():
+def get_proxy_stats():
     try:
-        with open('/proc/uptime', 'r') as f:
-            uptime_seconds = float(f.readline().split()[0])
-        days = int(uptime_seconds // 86400)
-        hours = int((uptime_seconds % 86400) // 3600)
-        minutes = int((uptime_seconds % 3600) // 60)
-        return f"{days} дн. {hours} ч. {minutes} мин."
-    except:
-        return "неизвестно"
-
-def server_status():
-    try:
-        subprocess.run(['systemctl', 'is-active', '--quiet', 'telemt'], check=True)
-        return "Работает"
-    except:
-        return "Отключен"
-
-def check_and_update_users_state():
-    state = load_users_state()
-    now = datetime.datetime.now()
-    changed = False
-    for username, data in list(state.items()):
-        if 'expired_at' in data and data['expired_at']:
-            expired = datetime.datetime.fromisoformat(data['expired_at'])
-            if not data.get('paused', False) and now >= expired:
-                # Срок истёк, ставим на паузу
-                data['paused'] = True
-                data['paused_remaining_seconds'] = 0
-                data['expired_at'] = None
-                changed = True
-                # Удалить из toml
-                users = get_telemt_users_toml()
-                if username in users:
-                    del users[username]
-                    update_telemt_users_toml(users)
-        if data.get('paused') and data.get('paused_remaining_seconds') == 0:
-            # Проверить, прошло ли больше суток после автоматической паузы (по метке)
-            # Добавим метку auto_paused_at, если нет - используем прошлое expired_at
-            auto_pause_str = data.get('auto_paused_at')
-            if auto_pause_str:
-                auto_paused = datetime.datetime.fromisoformat(auto_pause_str)
-            else:
-                # Если нет, считаем от expired_at (текущая логика)
-                if 'expired_at' in data and data['expired_at']:
-                    auto_paused = datetime.datetime.fromisoformat(data['expired_at'])
-                else:
-                    auto_paused = now
-            if (now - auto_paused) > datetime.timedelta(days=1):
-                # Удалить пользователя
-                del state[username]
-                changed = True
-                users = get_telemt_users_toml()
-                if username in users:
-                    del users[username]
-                    update_telemt_users_toml(users)
-    if changed:
-        save_users_state(state)
-    return state
-
-config = load_config()
-app.secret_key = config.get('secret_key', secrets.token_hex(16))
-
-if "..." in config.get('password_hash', ''):
-    config['password_hash'] = generate_password_hash('admin')
-    save_config(config)
+        result = subprocess.run(['ss', '-tn', 'state', 'established'], capture_output=True, text=True, timeout=5)
+        lines = result.stdout.splitlines()
+        ips = set()
+        for line in lines:
+            if ':443' in line:
+                parts = line.split()
+                if len(parts) >= 5:
+                    peer_addr = parts[4]
+                    ip = peer_addr.rsplit(':', 1)[0]
+                    ip = ip.replace('::ffff:', '').strip('[]')
+                    if ip and ip not in ['127.0.0.1', '0.0.0.0']:
+                        ips.add(ip)
+        return list(ips)
+    except Exception:
+        return []
 
 @app.before_request
 def require_login():
-    allowed = ['login', 'static']
-    if request.endpoint in allowed or (request.endpoint is None):
-        return
-    if 'user' not in session:
+    allowed_routes = ['login']
+    if request.endpoint not in allowed_routes and 'user' not in session and not request.path.startswith('/static'):
         return redirect(url_for('login'))
-    cfg = load_config()
-    if cfg.get('is_default') and request.endpoint not in ['admin', 'login']:
-        return redirect(url_for('admin'))
+    config = load_config()
+    if config.get('is_default') and request.endpoint not in ['change_password', 'login'] and 'user' in session:
+        return redirect(url_for('change_password'))
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -468,104 +427,36 @@ def logout():
     session.pop('user', None)
     return redirect(url_for('login'))
 
-@app.route('/admin', methods=['GET', 'POST'])
-def admin():
+@app.route('/change_password', methods=['GET', 'POST'])
+def change_password():
     if request.method == 'POST':
-        new_username = request.form.get('new_username', '').strip()
-        new_password = request.form.get('new_password', '')
+        new_pass = request.form['new_password']
         cfg = load_config()
-        changed = False
-        if new_username and new_username != cfg['username']:
-            cfg['username'] = new_username
-            changed = True
-        if new_password:
-            cfg['password_hash'] = generate_password_hash(new_password)
-            cfg['is_default'] = False
-            changed = True
-        if changed:
-            save_config(cfg)
-            flash('Учётные данные обновлены!', 'success')
-        else:
-            flash('Нет изменений', 'info')
-        return redirect(url_for('admin'))
-    cfg = load_config()
-    return render_template('admin.html', username=cfg['username'])
-
-@app.route('/settings', methods=['GET', 'POST'])
-def settings():
-    if request.method == 'POST':
-        new_fake = request.form.get('fake_tls', '').strip()
-        if new_fake:
-            # Обновить в toml
-            with open(TELEMT_TOML, 'r') as f:
-                tconfig = toml.load(f)
-            tconfig['censorship']['tls_domain'] = new_fake
-            with open(TELEMT_TOML, 'w') as f:
-                toml.dump(tconfig, f)
-            restart_telemt()
-            flash(f'Fake TLS домен изменён на {new_fake}', 'success')
-        return redirect(url_for('settings'))
-    with open(TELEMT_TOML, 'r') as f:
-        tconfig = toml.load(f)
-    current_fake = tconfig.get('censorship', {}).get('tls_domain', 'max.ru')
-    status = server_status()
-    uptime = server_uptime()
-    return render_template('settings.html', fake_domain=current_fake, server_status=status, uptime=uptime)
+        cfg['password_hash'] = generate_password_hash(new_pass)
+        cfg['is_default'] = False
+        save_config(cfg)
+        flash('Пароль успешно изменен!', 'success')
+        return redirect(url_for('dashboard'))
+    return render_template('change_password.html')
 
 @app.route('/', methods=['GET', 'POST'])
 def dashboard():
     cfg = load_config()
-    state = check_and_update_users_state()  # актуализация и удаление просроченных
-
-    # Получить пользователей из toml
-    tom_users = get_telemt_users_toml()
-    tls_domain = ""
     try:
         with open(TELEMT_TOML, 'r') as f:
-            tconfig = toml.load(f)
-        tls_domain = tconfig.get('censorship', {}).get('tls_domain', 'max.ru')
-    except:
-        tls_domain = "max.ru"
+            t_config = toml.load(f)
+    except FileNotFoundError:
+        t_config = {'access': {'users': {}}, 'censorship': {'tls_domain': 'max.ru'}}
+
+    users = t_config.get('access', {}).get('users', {})
+    tls_domain = t_config.get('censorship', {}).get('tls_domain', 'max.ru')
     hex_domain = tls_domain.encode('utf-8').hex()
 
-    # Объединить с состоянием для отображения таймера
-    users_info = {}
-    for uname, secret in tom_users.items():
-        user_state = state.get(uname, {})
-        paused = user_state.get('paused', False)
-        created_at = user_state.get('created_at', '')
-        expired_at_str = user_state.get('expired_at')
-        paused_rem = user_state.get('paused_remaining_seconds', 0)
-        remaining_str = ""
-        if not paused and expired_at_str:
-            expired = datetime.datetime.fromisoformat(expired_at_str)
-            now = datetime.datetime.now()
-            diff = expired - now
-            if diff.total_seconds() > 0:
-                days = diff.days
-                hours, rem = divmod(diff.seconds, 3600)
-                minutes = rem // 60
-                remaining_str = f"{days}д {hours}ч {minutes}м"
-            else:
-                remaining_str = "0д 0ч 0м"
-        elif paused and paused_rem > 0:
-            days = paused_rem // 86400
-            hours = (paused_rem % 86400) // 3600
-            minutes = (paused_rem % 3600) // 60
-            remaining_str = f"{days}д {hours}ч {minutes}м (пауза)"
-        elif paused and paused_rem == 0:
-            remaining_str = "0д 0ч 0м (пауза)"
-        else:
-            remaining_str = "—"
-
+    proxy_links = {}
+    for name, secret in users.items():
         final_secret = f"ee{secret}{hex_domain}"
         link = f"tg://proxy?server={cfg['proxy_host']}&port={cfg.get('proxy_port', 443)}&secret={final_secret}"
-        users_info[uname] = {
-            'secret': secret,
-            'link': link,
-            'paused': paused,
-            'remaining': remaining_str
-        }
+        proxy_links[name] = {'secret': secret, 'link': link}
 
     if request.method == 'POST':
         nickname = request.form.get('nickname', '').strip().replace(' ', '_')
@@ -577,157 +468,46 @@ def dashboard():
         user_key = f"{nickname}_{device}"
         new_secret = secrets.token_hex(16)
 
-        # Добавить в toml
-        tom_users = get_telemt_users_toml()
-        tom_users[user_key] = new_secret
-        update_telemt_users_toml(tom_users)
+        if 'access' not in t_config:
+            t_config['access'] = {}
+        if 'users' not in t_config['access']:
+            t_config['access']['users'] = {}
 
-        # Запись в state
-        now = datetime.datetime.now()
-        expired = now + datetime.timedelta(days=30)
-        state = load_users_state()
-        state[user_key] = {
-            'secret': new_secret,
-            'expired_at': expired.isoformat(),
-            'paused': False,
-            'paused_remaining_seconds': None,
-            'created_at': now.isoformat(),
-            'auto_paused_at': None
-        }
-        save_users_state(state)
+        t_config['access']['users'][user_key] = new_secret
+
+        with open(TELEMT_TOML, 'w') as f:
+            toml.dump(t_config, f)
+
+        restart_telemt()
         flash(f'Доступ для {user_key} создан!', 'success')
         return redirect(url_for('dashboard'))
 
-    # Статистика активных подключений
-    def get_active_ips():
-        try:
-            result = subprocess.run(['ss', '-tn', 'state', 'established'], capture_output=True, text=True, timeout=5)
-            lines = result.stdout.splitlines()
-            ips = set()
-            for line in lines:
-                if ':443' in line:
-                    parts = line.split()
-                    if len(parts) >= 5:
-                        peer = parts[4]
-                        ip = peer.rsplit(':', 1)[0].replace('::ffff:', '').strip('[]')
-                        if ip and ip not in ('127.0.0.1', '0.0.0.0'):
-                            ips.add(ip)
-            return list(ips)
-        except:
-            return []
-    active_ips = get_active_ips()
-    total_users = len(users_info)
-
-    status = server_status()
-    uptime = server_uptime()
-    return render_template('dashboard.html',
-                           users=users_info,
-                           host=cfg['proxy_host'],
-                           stats=active_ips,
-                           total_users=total_users,
-                           server_status=status,
-                           uptime=uptime)
-
-@app.route('/pause/<username>')
-def pause_user(username):
-    state = load_users_state()
-    if username not in state:
-        flash('Пользователь не найден', 'danger')
-        return redirect(url_for('dashboard'))
-    user_state = state[username]
-    if user_state.get('paused', False):
-        flash('Уже на паузе', 'info')
-        return redirect(url_for('dashboard'))
-    # Вычислить оставшееся время
-    remaining = 30*24*3600  # def
-    if user_state.get('expired_at'):
-        expired = datetime.datetime.fromisoformat(user_state['expired_at'])
-        now = datetime.datetime.now()
-        remaining = max(0, int((expired - now).total_seconds()))
-    # Обновить состояние
-    user_state['paused'] = True
-    user_state['paused_remaining_seconds'] = remaining
-    user_state['expired_at'] = None
-    state[username] = user_state
-    # Удалить из toml
-    users = get_telemt_users_toml()
-    if username in users:
-        del users[username]
-        update_telemt_users_toml(users)
-    save_users_state(state)
-    flash(f'{username} поставлен на паузу', 'success')
-    return redirect(url_for('dashboard'))
-
-@app.route('/resume/<username>')
-def resume_user(username):
-    state = load_users_state()
-    if username not in state:
-        flash('Пользователь не найден', 'danger')
-        return redirect(url_for('dashboard'))
-    user_state = state[username]
-    if not user_state.get('paused', False):
-        flash('Не на паузе', 'info')
-        return redirect(url_for('dashboard'))
-    remaining = user_state.get('paused_remaining_seconds', 30*24*3600)
-    now = datetime.datetime.now()
-    new_expired = now + datetime.timedelta(seconds=remaining)
-    user_state['paused'] = False
-    user_state['expired_at'] = new_expired.isoformat()
-    user_state['paused_remaining_seconds'] = None
-    # Добавить обратно в toml
-    secret = user_state.get('secret')
-    if not secret:
-        flash('Ошибка: отсутствует секрет!', 'danger')
-        return redirect(url_for('dashboard'))
-    users = get_telemt_users_toml()
-    users[username] = secret
-    update_telemt_users_toml(users)
-    save_users_state(state)
-    flash(f'{username} возобновлён', 'success')
-    return redirect(url_for('dashboard'))
+    stats = get_proxy_stats()
+    return render_template('dashboard.html', links=proxy_links, host=cfg['proxy_host'], stats=stats)
 
 @app.route('/delete/<username>')
 def delete_user(username):
-    state = load_users_state()
-    if username in state:
-        del state[username]
-        save_users_state(state)
-    users = get_telemt_users_toml()
-    if username in users:
-        del users[username]
-        update_telemt_users_toml(users)
-    flash(f'Пользователь {username} удалён', 'success')
+    try:
+        with open(TELEMT_TOML, 'r') as f:
+            t_config = toml.load(f)
+        if username in t_config.get('access', {}).get('users', {}):
+            del t_config['access']['users'][username]
+            with open(TELEMT_TOML, 'w') as f:
+                toml.dump(t_config, f)
+            restart_telemt()
+            flash(f'Пользователь {username} удален', 'success')
+    except Exception as e:
+        flash(f'Ошибка: {str(e)}', 'danger')
     return redirect(url_for('dashboard'))
-
-@app.route('/qr/<username>')
-def qr_user(username):
-    users = get_telemt_users_toml()
-    if username not in users:
-        return "Not found", 404
-    secret = users[username]
-    cfg = load_config()
-    with open(TELEMT_TOML, 'r') as f:
-        tconfig = toml.load(f)
-    tls_domain = tconfig.get('censorship', {}).get('tls_domain', 'max.ru')
-    hex_domain = tls_domain.encode('utf-8').hex()
-    final_secret = f"ee{secret}{hex_domain}"
-    link = f"tg://proxy?server={cfg['proxy_host']}&port={cfg.get('proxy_port', 443)}&secret={final_secret}"
-    img = qrcode.make(link)
-    buf = BytesIO()
-    img.save(buf, 'PNG')
-    buf.seek(0)
-    return send_file(buf, mimetype='image/png')
 
 if __name__ == '__main__':
     port = int(os.environ.get('PANEL_PORT', 4444))
     app.run(host='0.0.0.0', port=port)
 PYEOF
 
-success "Backend создан"
+echo -e "${GREEN}Backend панели создан${RESET}"
 
-step "10/13" "Создание HTML шаблонов..."
-
-# Шаблон layout.html с футером
+# HTML шаблоны с красивым дизайном
 cat > "$PANEL_DIR/templates/layout.html" << 'HTMLEOF'
 <!DOCTYPE html>
 <html lang="ru">
@@ -739,38 +519,57 @@ cat > "$PANEL_DIR/templates/layout.html" << 'HTMLEOF'
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <style>
         body {
-            background: #f4f6f9;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
         }
-        .navbar { background: #fff; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
-        .card { border: none; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.05); }
-        .btn { border-radius: 8px; }
-        .footer { text-align: center; padding: 1rem; font-size: 0.85rem; color: #6c757d; }
-        @media (max-width: 768px) {
-            .container { padding: 10px; }
+        .container { max-width: 1000px; margin-top: 2rem; }
+        .card {
+            border: none;
+            border-radius: 15px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            backdrop-filter: blur(10px);
+        }
+        .card-header {
+            border-radius: 15px 15px 0 0 !important;
+            font-weight: 600;
+        }
+        .btn {
+            border-radius: 8px;
+            font-weight: 500;
+        }
+        .form-control, .form-select {
+            border-radius: 8px;
+            border: 2px solid #e0e0e0;
+        }
+        .form-control:focus, .form-select:focus {
+            border-color: #667eea;
+            box-shadow: 0 0 0 0.2rem rgba(102,126,234,0.25);
+        }
+        .badge {
+            padding: 0.5em 0.8em;
+            border-radius: 6px;
+        }
+        .table {
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        .alert {
+            border-radius: 10px;
+            border: none;
+        }
+        h2, h3, h4, h5 {
+            font-weight: 600;
         }
     </style>
 </head>
 <body>
-    <nav class="navbar navbar-expand-lg navbar-light mb-4">
-        <div class="container">
-            <a class="navbar-brand fw-bold" href="/"><i class="fas fa-shield-alt"></i> Proxy Panel</a>
-            <div class="navbar-nav ms-auto">
-                {% if session.user %}
-                <a class="nav-link" href="/"><i class="fas fa-tachometer-alt"></i> Главная</a>
-                <a class="nav-link" href="/settings"><i class="fas fa-cog"></i> Настройки</a>
-                <a class="nav-link" href="/admin"><i class="fas fa-user-shield"></i> Аккаунт</a>
-                <a class="nav-link" href="/logout"><i class="fas fa-sign-out-alt"></i> Выход</a>
-                {% endif %}
-            </div>
-        </div>
-    </nav>
     <div class="container">
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
                 {% for category, message in messages %}
                     <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
-                        {{ message }}
+                        <i class="fas fa-info-circle me-2"></i>{{ message }}
                         <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
                     </div>
                 {% endfor %}
@@ -778,9 +577,7 @@ cat > "$PANEL_DIR/templates/layout.html" << 'HTMLEOF'
         {% endwith %}
         {% block content %}{% endblock %}
     </div>
-    <footer class="footer">MTProto Proxy Panel 2026 by Mr_EFES</footer>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    {% block scripts %}{% endblock %}
 </body>
 </html>
 HTMLEOF
@@ -789,229 +586,190 @@ cat > "$PANEL_DIR/templates/login.html" << 'HTMLEOF'
 {% extends "layout.html" %}
 {% block content %}
 <div class="row justify-content-center">
-    <div class="col-md-5">
-        <div class="card p-4">
-            <h3 class="mb-3"><i class="fas fa-lock"></i> Вход</h3>
-            <form method="POST">
-                <div class="mb-3">
-                    <label>Логин</label>
-                    <input type="text" name="username" class="form-control" required>
+    <div class="col-md-6 col-lg-5">
+        <div class="card shadow-sm">
+            <div class="card-body p-5">
+                <div class="text-center mb-4">
+                    <i class="fas fa-shield-alt fa-3x text-primary mb-3"></i>
+                    <h3 class="card-title">Вход в панель</h3>
+                    <p class="text-muted">MTProto Proxy Manager</p>
                 </div>
-                <div class="mb-3">
-                    <label>Пароль</label>
-                    <input type="password" name="password" class="form-control" required>
-                </div>
-                <button type="submit" class="btn btn-primary w-100">Войти</button>
-            </form>
+                <form method="POST">
+                    <div class="mb-3">
+                        <label class="form-label"><i class="fas fa-user me-2"></i>Логин</label>
+                        <input type="text" name="username" class="form-control" required autofocus>
+                    </div>
+                    <div class="mb-4">
+                        <label class="form-label"><i class="fas fa-lock me-2"></i>Пароль</label>
+                        <input type="password" name="password" class="form-control" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100 py-2">
+                        <i class="fas fa-sign-in-alt me-2"></i>Войти
+                    </button>
+                </form>
+            </div>
         </div>
     </div>
 </div>
 {% endblock %}
-
 HTMLEOF
 
-cat > "$PANEL_DIR/templates/admin.html" << 'HTMLEOF'
+cat > "$PANEL_DIR/templates/change_password.html" << 'HTMLEOF'
 {% extends "layout.html" %}
 {% block content %}
 <div class="row justify-content-center">
-    <div class="col-md-6">
-        <div class="card p-4">
-            <h4><i class="fas fa-user-cog"></i> Настройки аккаунта</h4>
-            <form method="POST">
-                <div class="mb-3">
-                    <label>Логин</label>
-                    <input type="text" name="new_username" class="form-control" value="{{ username }}">
+    <div class="col-md-6 col-lg-5">
+        <div class="card border-warning shadow-sm">
+            <div class="card-body p-5">
+                <div class="text-center mb-4">
+                    <i class="fas fa-exclamation-triangle fa-3x text-warning mb-3"></i>
+                    <h4 class="card-title text-warning">Смена пароля</h4>
+                    <p class="text-muted small">В целях безопасности измените пароль по умолчанию.</p>
                 </div>
-                <div class="mb-3">
-                    <label>Новый пароль</label>
-                    <input type="password" name="new_password" class="form-control" placeholder="Оставьте пустым, чтобы не менять">
-                </div>
-                <button type="submit" class="btn btn-warning">Сохранить</button>
-            </form>
-        </div>
-    </div>
-</div>
-{% endblock %}
-HTMLEOF
-
-cat > "$PANEL_DIR/templates/settings.html" << 'HTMLEOF'
-{% extends "layout.html" %}
-{% block content %}
-<div class="row">
-    <div class="col-lg-6">
-        <div class="card mb-3 p-3">
-            <h5><i class="fas fa-server"></i> Статус сервера</h5>
-            <p>Прокси: <span class="badge {% if server_status == 'Работает' %}bg-success{% else %}bg-danger{% endif %}">{{ server_status }}</span></p>
-            <p>Uptime: {{ uptime }}</p>
-        </div>
-        <div class="card p-3">
-            <h5><i class="fas fa-mask"></i> Fake TLS маскировка</h5>
-            <form method="POST">
-                <div class="mb-2">
-                    <label>Текущий SNI</label>
-                    <input type="text" name="fake_tls" class="form-control" value="{{ fake_domain }}">
-                </div>
-                <div class="mb-2">
-                    <small>Быстрый выбор:</small>
-                    <div class="d-flex flex-wrap gap-1">
-                        <button type="button" class="btn btn-sm btn-outline-secondary preset-btn" data-domain="ads.x5.ru">ads.x5.ru</button>
-                        <button type="button" class="btn btn-sm btn-outline-secondary preset-btn" data-domain="1c.ru">1c.ru</button>
-                        <button type="button" class="btn btn-sm btn-outline-secondary preset-btn" data-domain="ozon.ru">ozon.ru</button>
-                        <button type="button" class="btn btn-sm btn-outline-secondary preset-btn" data-domain="vk.com">vk.com</button>
-                        <button type="button" class="btn btn-sm btn-outline-secondary preset-btn" data-domain="max.ru">max.ru</button>
+                <form method="POST">
+                    <div class="mb-3">
+                        <label class="form-label"><i class="fas fa-key me-2"></i>Новый пароль</label>
+                        <input type="password" name="new_password" class="form-control" required minlength="6">
                     </div>
-                </div>
-                <button type="submit" class="btn btn-primary">Применить</button>
-            </form>
+                    <button type="submit" class="btn btn-warning w-100 py-2">
+                        <i class="fas fa-save me-2"></i>Сохранить
+                    </button>
+                </form>
+            </div>
         </div>
     </div>
 </div>
 {% endblock %}
-{% block scripts %}
-<script>
-    document.querySelectorAll('.preset-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            document.querySelector('input[name="fake_tls"]').value = btn.dataset.domain;
-        });
-    });
-</script>
-{% endblock %}
 HTMLEOF
 
-# Шаблон dashboard — ключевой с двухколоночным макетом
 cat > "$PANEL_DIR/templates/dashboard.html" << 'HTMLEOF'
 {% extends "layout.html" %}
 {% block content %}
-<div class="row">
-    <div class="col-lg-7">
-        <!-- Статус сервера -->
-        <div class="card mb-3 p-3 d-flex flex-row align-items-center">
-            <div class="me-3">
-                <span class="badge fs-6 {% if server_status == 'Работает' %}bg-success{% else %}bg-danger{% endif %}">{{ server_status }}</span>
-            </div>
-            <div>
-                <strong>Uptime:</strong> {{ uptime }}
-            </div>
-        </div>
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2 class="text-white"><i class="fas fa-shield-alt me-2"></i>MTProto Proxy Panel</h2>
+    <a href="{{ url_for('logout') }}" class="btn btn-outline-light btn-sm">
+        <i class="fas fa-sign-out-alt me-1"></i>Выход
+    </a>
+</div>
 
-        <!-- Создание доступа -->
-        <div class="card mb-3 p-3">
-            <h5><i class="fas fa-plus-circle text-success"></i> Создать доступ</h5>
-            <form method="POST" class="row g-2">
-                <div class="col-md-5">
-                    <input type="text" name="nickname" class="form-control" placeholder="Никнейм" required>
-                </div>
-                <div class="col-md-4">
-                    <select name="device" class="form-select">
-                        <option value="Phone">📱 Телефон</option>
-                        <option value="PC">💻 Компьютер</option>
-                        <option value="Tablet">📟 Планшет</option>
-                    </select>
-                </div>
-                <div class="col-md-3">
-                    <button type="submit" class="btn btn-success w-100">Создать</button>
-                </div>
-            </form>
-        </div>
+<div class="card shadow-sm mb-4">
+    <div class="card-header bg-success text-white">
+        <h5 class="mb-0"><i class="fas fa-plus-circle me-2"></i>Создать доступ</h5>
+    </div>
+    <div class="card-body">
+        <form method="POST" class="row g-2 align-items-end">
+            <div class="col-12 col-md-5">
+                <label class="form-label text-muted small mb-1">Никнейм</label>
+                <input type="text" name="nickname" class="form-control" placeholder="Например: Ivan" required>
+            </div>
+            <div class="col-12 col-md-4">
+                <label class="form-label text-muted small mb-1">Устройство</label>
+                <select name="device" class="form-select">
+                    <option value="Phone">📱 Телефон</option>
+                    <option value="PC">💻 Компьютер</option>
+                    <option value="Tablet">📟 Планшет</option>
+                </select>
+            </div>
+            <div class="col-12 col-md-3">
+                <button type="submit" class="btn btn-success w-100">
+                    <i class="fas fa-magic me-1"></i>Генерировать
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
 
-        <!-- Статистика -->
-        <div class="card mb-3 p-3">
-            <h5><i class="fas fa-chart-bar"></i> Статистика</h5>
-            <p>Всего доступов: <strong>{{ total_users }}</strong></p>
-            <p>Активных IP (443): <strong>{{ stats|length }}</strong></p>
-            <div class="d-flex flex-wrap gap-1">
+<div class="card shadow-sm mb-4">
+    <div class="card-header bg-primary text-white">
+        <h5 class="mb-0"><i class="fas fa-list me-2"></i>Список доступов</h5>
+    </div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle">
+                <thead class="table-light">
+                    <tr>
+                        <th><i class="fas fa-user me-1"></i>Имя_Устройство</th>
+                        <th><i class="fas fa-link me-1"></i>Ссылка</th>
+                        <th class="text-end"><i class="fas fa-cog me-1"></i>Действие</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% if links %}
+                        {% for name, data in links.items() %}
+                        <tr>
+                            <td class="fw-bold">{{ name }}</td>
+                            <td>
+                                <div class="input-group input-group-sm">
+                                    <input type="text" class="form-control" value="{{ data.link }}" readonly id="link-{{ loop.index }}">
+                                    <button class="btn btn-outline-secondary" type="button"
+                                            onclick="navigator.clipboard.writeText(document.getElementById('link-{{ loop.index }}').value);
+                                                     this.innerHTML='<i class=\'fas fa-check\'></i>';
+                                                     setTimeout(()=>this.innerHTML='<i class=\'fas fa-copy\'></i> Копия',1500)">
+                                        <i class="fas fa-copy me-1"></i>Копия
+                                    </button>
+                                </div>
+                            </td>
+                            <td class="text-end">
+                                <a href="{{ url_for('delete_user', username=name) }}"
+                                   class="btn btn-sm btn-danger"
+                                   onclick="return confirm('Удалить пользователя {{ name }}?')">
+                                    <i class="fas fa-trash"></i>
+                                </a>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    {% else %}
+                        <tr>
+                            <td colspan="3" class="text-center text-muted py-4">
+                                <i class="fas fa-inbox fa-2x mb-2"></i><br>
+                                Нет созданных пользователей
+                            </td>
+                        </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="card shadow-sm">
+    <div class="card-header bg-info text-white">
+        <div class="d-flex justify-content-between align-items-center">
+            <h5 class="mb-0"><i class="fas fa-chart-line me-2"></i>Активные подключения</h5>
+            <span class="badge bg-light text-dark">{{ stats|length }} онлайн</span>
+        </div>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small mb-3">
+            <i class="fas fa-info-circle me-1"></i>
+            Уникальные IP-адреса, подключенные в данный момент к порту 443.
+        </p>
+        {% if stats %}
+            <div class="d-flex flex-wrap gap-2">
                 {% for ip in stats %}
-                    <span class="badge bg-secondary">{{ ip }}</span>
+                    <span class="badge bg-secondary border">
+                        <i class="fas fa-globe me-1"></i>{{ ip }}
+                    </span>
                 {% endfor %}
             </div>
-        </div>
-    </div>
-
-    <!-- Список доступов (правая колонка) -->
-    <div class="col-lg-5">
-        <div class="card p-3">
-            <h5><i class="fas fa-users"></i> Список доступов</h5>
-            {% if users %}
-                <div class="table-responsive">
-                    <table class="table table-hover align-middle">
-                        <thead>
-                            <tr><th>Пользователь</th><th>Таймер</th><th>Действия</th></tr>
-                        </thead>
-                        <tbody>
-                        {% for uname, data in users.items() %}
-                            <tr>
-                                <td>
-                                    <strong>{{ uname }}</strong>
-                                    <br><small class="text-muted">{{ data.remaining }}</small>
-                                </td>
-                                <td>
-                                    {% if data.paused %}
-                                        <span class="text-danger">Пауза</span>
-                                    {% else %}
-                                        <span class="text-success">Активен</span>
-                                        <br><small>{{ data.remaining }}</small>
-                                    {% endif %}
-                                </td>
-                                <td>
-                                    <div class="btn-group btn-group-sm">
-                                        <button class="btn btn-outline-secondary" onclick="copyLink('{{ data.link }}')"><i class="fas fa-copy"></i></button>
-                                        <button class="btn btn-outline-info" onclick="showQR('{{ uname }}')"><i class="fas fa-qrcode"></i></button>
-                                        {% if data.paused %}
-                                            <a href="{{ url_for('resume_user', username=uname) }}" class="btn btn-outline-success" title="Возобновить"><i class="fas fa-play"></i></a>
-                                        {% else %}
-                                            <a href="{{ url_for('pause_user', username=uname) }}" class="btn btn-outline-warning" title="Пауза"><i class="fas fa-pause"></i></a>
-                                        {% endif %}
-                                        <a href="{{ url_for('delete_user', username=uname) }}" class="btn btn-outline-danger" onclick="return confirm('Удалить {{ uname }}?')"><i class="fas fa-trash"></i></a>
-                                    </div>
-                                </td>
-                            </tr>
-                        {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
-            {% else %}
-                <p class="text-muted">Нет созданных доступов.</p>
-            {% endif %}
-        </div>
+        {% else %}
+            <p class="text-muted mb-0">
+                <i class="fas fa-clock me-1"></i>
+                В данный момент нет активных сессий.
+            </p>
+        {% endif %}
     </div>
 </div>
-
-<!-- Модальное окно QR -->
-<div class="modal fade" id="qrModal" tabindex="-1">
-  <div class="modal-dialog modal-sm modal-dialog-centered">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h5 class="modal-title">QR-код</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-      </div>
-      <div class="modal-body text-center">
-        <img id="qrImage" src="" class="img-fluid">
-      </div>
-    </div>
-  </div>
-</div>
-{% endblock %}
-{% block scripts %}
-<script>
-function copyLink(link) {
-    navigator.clipboard.writeText(link);
-    alert('Ссылка скопирована!');
-}
-function showQR(username) {
-    document.getElementById('qrImage').src = '/qr/' + username;
-    new bootstrap.Modal(document.getElementById('qrModal')).show();
-}
-</script>
 {% endblock %}
 HTMLEOF
 
-success "HTML шаблоны созданы"
+echo -e "${GREEN}HTML шаблоны созданы${RESET}"
 
-step "11/13" "Создание службы панели..."
-
+# Systemd служба для панели
+echo -e "${YELLOW}Настройка службы панели...${RESET}"
 cat > /etc/systemd/system/telemt-panel.service << EOF
 [Unit]
-Description=MTProto Proxy Web Panel
+Description=MTProto Proxy Web Panel (Gunicorn)
 After=network.target
 
 [Service]
@@ -1035,22 +793,27 @@ systemctl daemon-reload
 systemctl enable telemt-panel --now >/dev/null 2>&1
 sleep 3
 
+echo -ne "${YELLOW}Проверка службы панели... ${RESET}"
 if systemctl is-active --quiet telemt-panel; then
-    success "Панель управления запущена"
+    echo -e "${GREEN}РАБОТАЕТ${RESET}"
 else
-    error "Панель НЕ запустилась. Логи:"
+    echo -e "${RED}НЕ РАБОТАЕТ${RESET}"
+    echo -e "${YELLOW}Логи службы:${RESET}"
     journalctl -u telemt-panel --no-pager -n 10
 fi
+echo ""
 
 # ==========================================
-# АВТООБНОВЛЕНИЕ
+# ЧАСТЬ 6: АВТООБНОВЛЕНИЕ
 # ==========================================
-step "12/13" "Настройка автообновлений..."
+echo -e "${BOLD}--- НАСТРОЙКА АВТООБНОВЛЕНИЯ ---${RESET}"
 
 cat > /usr/local/bin/telemt-updater.sh << 'UPDATEEOF'
 #!/bin/bash
+# Скрипт умного автообновления ядра Telemt
 CURRENT_VER=$(telemt --version 2>/dev/null | awk '{print $2}' || echo "0.0.0")
 LATEST_VER=$(curl -s https://api.github.com/repos/telemt/telemt/releases/latest 2>/dev/null | jq -r .tag_name 2>/dev/null | sed 's/v//' || echo "")
+
 if [[ -n "$LATEST_VER" && "$LATEST_VER" != "null" && "$CURRENT_VER" != "$LATEST_VER" ]]; then
     ARCH=$(uname -m)
     case "$ARCH" in
@@ -1067,17 +830,22 @@ if [[ -n "$LATEST_VER" && "$LATEST_VER" != "null" && "$CURRENT_VER" != "$LATEST_
     rm -f /tmp/upd.tar.gz
 fi
 UPDATEEOF
+
 chmod +x /usr/local/bin/telemt-updater.sh
 
+# Настраиваем cron задачи
 (crontab -l 2>/dev/null | grep -v "telemt-updater" | grep -v "certbot renew") | crontab - 2>/dev/null || true
 (crontab -l 2>/dev/null 2>/dev/null; echo "0 4 * * * /usr/local/bin/telemt-updater.sh") | crontab - 2>/dev/null || true
 (crontab -l 2>/dev/null 2>/dev/null; echo "0 3 * * * certbot renew --post-hook 'systemctl restart telemt telemt-panel' >/dev/null 2>&1") | crontab - 2>/dev/null || true
-success "Автообновление настроено (Telemt: 04:00, сертификаты: 03:00)"
+
+echo -e "${GREEN}Автообновление настроено${RESET}"
+echo -e "  - Telemt: ежедневно в 04:00"
+echo -e "  - Сертификаты: ежедневно в 03:00"
+echo ""
 
 # ==========================================
 # ФИНАЛЬНЫЙ ОТЧЕТ
 # ==========================================
-step "13/13" "Установка завершена!"
 echo -e "${CYAN}${BOLD}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "           🎉 УСТАНОВКА ЗАВЕРШЕНА УСПЕШНО! 🎉"
@@ -1097,7 +865,5 @@ echo ""
 echo -e "${BOLD}🔗 ССЫЛКА ДЛЯ ПОДКЛЮЧЕНИЯ:${RESET}"
 echo -e "${GREEN}${TG_LINK}${RESET}"
 echo ""
-echo -e "QR-код (консоль):"
-qrencode -t ANSIUTF8 "$TG_LINK"
-echo ""
 echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+echo ""
